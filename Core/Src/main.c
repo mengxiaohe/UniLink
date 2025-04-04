@@ -29,6 +29,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <string.h>
 
 #include "bme280.h"
 #include "dns_resolver.h"
@@ -68,6 +69,49 @@ static void MPU_Config(void);
 PUTCHAR_PROTOTYPE {
     HAL_UART_Transmit(&huart1, (uint8_t *) &ch, 1, 0xFFFF);
     return ch;
+}
+
+float Temperature, Pressure, Humidity;
+#define BUFFER_SIZE 64    // 定义接收缓冲区大小
+uint8_t rxIndex = 0;
+char rxBuffer[BUFFER_SIZE];
+uint8_t uartReceiveByte;
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART1) {
+        // 存储接收到的字节
+        if (rxIndex < BUFFER_SIZE - 1) {
+            rxBuffer[rxIndex++] = uartReceiveByte;
+            // 检查结束符
+            if (uartReceiveByte == '\n' || uartReceiveByte == '\r') {
+                rxBuffer[rxIndex - 1] = '\0'; // 替换结束符为字符串结束符
+                // 处理命令
+                if (strncmp(rxBuffer, "reboot", rxIndex) == 0) {
+                    printf("Rebooting...\n");
+                    NVIC_SystemReset();
+                }
+                if (strncmp(rxBuffer, "pressure", rxIndex) == 0) {
+                    BME280_Measure();
+                    printf("Pressure:%.0f\n", Pressure/100);
+                } else if (strncmp(rxBuffer, "time", rxIndex) == 0) {
+                    DS3231_TimeType rtcTime;
+                    DS3231_GetTime(&rtcTime);
+                    printf("Time:20%02d-%02d-%02d %02d:%02d:%02d\n",
+                           rtcTime.year, rtcTime.month, rtcTime.date,
+                           rtcTime.hours, rtcTime.minutes, rtcTime.seconds);
+                } else {
+                    printf("%.*s\r\n", rxIndex, rxBuffer);
+                }
+                rxIndex = 0; // 重置索引
+            }
+        } else {
+            printf("Buffer overflow. Clearing buffer.\n");
+            memset(rxBuffer, 0, BUFFER_SIZE);
+            rxIndex = 0;
+        }
+        // 继续接收下一个字节
+        HAL_UART_Receive_IT(huart, &uartReceiveByte, 1);
+    }
 }
 
 /* USER CODE END PFP */
@@ -113,6 +157,7 @@ int main(void) {
     MX_LWIP_Init();
     MX_IWDG1_Init();
     /* USER CODE BEGIN 2 */
+    HAL_UART_Receive_IT(&huart1, &uartReceiveByte, 1);
     DS3231_TimeType rtcTime;
     DS3231_GetTime(&rtcTime);
     printf("20%02d-%02d-%02d %02d:%02d:%02d\r\n",
@@ -131,17 +176,40 @@ int main(void) {
     printf("API Server IP: %s\n", ip4addr_ntoa(&api_ip));
     HAL_IWDG_Refresh(&hiwdg1);
     BME280_Config(OSRS_2, OSRS_16, OSRS_1, MODE_NORMAL, T_SB_0p5, IIR_16);
+    ip_addr_t PC_IPADDR;
+    IP_ADDR4(&PC_IPADDR, 192, 168, 20, 166);
+
+    struct udp_pcb *my_udp = udp_new();
+    udp_connect(my_udp, &PC_IPADDR, 8987);
+    struct pbuf *udp_buffer = NULL;
+
+
     /* USER CODE END 2 */
 
     /* Infinite loop */
     /* USER CODE BEGIN WHILE */
     while (1) {
+        char buffer[100];
         /* USER CODE END WHILE */
 
         /* USER CODE BEGIN 3 */
         MX_LWIP_Process();
         HAL_IWDG_Refresh(&hiwdg1);
+        HAL_IWDG_Refresh(&hiwdg1);
+        for (int i = 0; i < 499999; ++i) {
+            MX_LWIP_Process();
+        }
+        DS3231_GetTime(&rtcTime);
         BME280_Measure();
+        sprintf(buffer, "Hello UDP message! 20%02d-%02d-%02d %02d:%02d:%02d\n\r",
+                rtcTime.year, rtcTime.month, rtcTime.date,
+                rtcTime.hours, rtcTime.minutes, rtcTime.seconds);
+        udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(buffer), PBUF_RAM);
+        if (udp_buffer != NULL) {
+            memcpy(udp_buffer->payload, buffer, strlen(buffer));
+            udp_send(my_udp, udp_buffer);
+            pbuf_free(udp_buffer);
+        }
     }
     /* USER CODE END 3 */
 }
