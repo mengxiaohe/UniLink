@@ -67,8 +67,8 @@
 #define LWIP_SUPPORT_CUSTOM_PBUF 1
 /*----- Value in opt.h for LWIP_ETHERNET: LWIP_ARP || PPPOE_SUPPORT -*/
 #define LWIP_ETHERNET 1
-/*----- Default Value for LWIP_DHCP_BOOTP_FILE: 0 ---*/
-#define LWIP_DHCP_BOOTP_FILE 1
+/*----- Value in opt.h for LWIP_MULTICAST_TX_OPTIONS: LWIP_IGMP -----*/
+#define LWIP_MULTICAST_TX_OPTIONS 1
 /*----- Default Value for LWIP_AUTOIP: 0 ---*/
 #define LWIP_AUTOIP 1
 /*----- Value in opt.h for LWIP_DNS_SECURE: (LWIP_DNS_SECURE_RAND_XID | LWIP_DNS_SECURE_NO_MULTIPLE_OUTSTANDING | LWIP_DNS_SECURE_RAND_SRC_PORT) -*/
@@ -91,8 +91,12 @@
 #define LWIP_SOCKET 0
 /*----- Value in opt.h for RECV_BUFSIZE_DEFAULT: INT_MAX -----*/
 #define RECV_BUFSIZE_DEFAULT 2000000000
+/*----- Default Value for LWIP_IPV6: 0 ---*/
+#define LWIP_IPV6 1
 /*----- Default Value for LWIP_SNTP: 0 ---*/
 #define LWIP_SNTP 1
+/*----- Default Value for SNTP_COMP_ROUNDTRIP: 0 ---*/
+#define SNTP_COMP_ROUNDTRIP 1
 /*----- Value in opt.h for LWIP_STATS: 1 -----*/
 #define LWIP_STATS 0
 /*----- Value in opt.h for CHECKSUM_GEN_IP: 1 -----*/

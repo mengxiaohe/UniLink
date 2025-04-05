@@ -209,6 +209,9 @@ static void low_level_init(struct netif *netif)
   /* Initialize the RX POOL */
   LWIP_MEMPOOL_INIT(RX_POOL);
 
+  /* Pass all multicast frames: needed for IPv6 protocol*/
+  heth.Instance->MACPFR |= ETH_MACPFR_PM;
+
 #if LWIP_ARP || LWIP_ETHERNET
   /* set MAC hardware address length */
   netif->hwaddr_len = ETH_HWADDR_LEN;

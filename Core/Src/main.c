@@ -77,6 +77,7 @@ PUTCHAR_PROTOTYPE {
 }
 
 float Temperature, Pressure, Humidity;
+uint32_t packet_seq = 0;
 #define BUFFER_SIZE 64    // 定义接收缓冲区大小
 uint8_t rxIndex = 0;
 char rxBuffer[BUFFER_SIZE];
@@ -122,14 +123,51 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
     if (p == NULL) return;
     // 优化1: 使用固定缓冲区防止溢出
-    char buffer[128];
+    char buffer[1473];
     // 优化2: 安全拷贝数据并添加终止符
     const u16_t len = pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
     buffer[len > sizeof(buffer) - 1 ? sizeof(buffer) - 1 : len] = '\0';
-    // 优化3: 添加来源信息并限制输出长度
-    printf("UDP[%s:%d] %.*s\n", ipaddr_ntoa(addr), port, (int) sizeof(buffer), buffer);
-    // 优化4: 提前释放pbuf资源
+    cJSON *packet = cJSON_Parse(buffer);
     pbuf_free(p);
+    if (packet == NULL) {
+        const char *error_ptr = cJSON_GetErrorPtr();
+        if (error_ptr != NULL) {
+            printf("JSON 解析错误 UDP[%s:%d] %.*s\n", ipaddr_ntoa(addr), port, (int) sizeof(buffer), buffer);
+        }
+        return;
+    }
+    char sn_str[16];
+    snprintf(sn_str, sizeof(sn_str), "%08X%08X%08X",
+             HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2());
+    const cJSON *sn_item = cJSON_GetObjectItemCaseSensitive(packet, "sn");
+    if (!cJSON_IsString(sn_item)) {
+        cJSON_Delete(packet);
+        return;
+    }
+    const char *sn = cJSON_GetStringValue(sn_item);
+    if (sn == NULL || strcmp(sn_str, sn) != 0) {
+        cJSON_Delete(packet);
+        return;
+    }
+    const cJSON *cmd_item = cJSON_GetObjectItemCaseSensitive(packet, "cmd");
+    if (cJSON_IsString(cmd_item)) {
+        const char *cmd = cJSON_GetStringValue(cmd_item);
+        if (cmd != NULL) {
+            if (strcmp(cmd, "reboot") == 0) {
+                NVIC_SystemReset();
+            }
+            if (strcmp(cmd, "time") == 0) {
+                DS3231_TimeType rtcTime;
+                DS3231_GetTime(&rtcTime);
+                printf("Time:20%02d-%02d-%02d %02d:%02d:%02d\n",
+                       rtcTime.year, rtcTime.month, rtcTime.date,
+                       rtcTime.hours, rtcTime.minutes, rtcTime.seconds);
+            } else if (strcmp(cmd, "pong") == 0) {
+                HAL_IWDG_Refresh(&hiwdg1);
+            }
+        }
+    }
+    cJSON_Delete(packet);
 }
 
 
@@ -207,21 +245,30 @@ int main(void) {
     do {
         MX_LWIP_Process();
         dhcp = netif_dhcp_data(&gnetif);
-    } while (dhcp == NULL || dhcp->state != DHCP_STATE_BOUND);
+    } while (dhcp == NULL || dhcp->state != DHCP_STATE_BOUND || !ip6_addr_isvalid(netif_ip6_addr_state(&gnetif, 1)));
     HAL_IWDG_Refresh(&hiwdg1);
     printf("IPv4 Address:%s\n", ip4addr_ntoa(netif_ip4_addr(&gnetif)));
+    printf("IPv6 Address:%s \n", ip6addr_ntoa(netif_ip6_addr(&gnetif, 1)));
+
     const ip_addr_t ntp_ip = get_ntp_ip();
-    printf("NTP Server IP: %s\n", ip4addr_ntoa(&ntp_ip));
+    printf("NTP Server IP: %s\n", ipaddr_ntoa(&ntp_ip));
     const ip_addr_t api_ip = get_api_ip();
-    printf("API Server IP: %s\n", ip4addr_ntoa(&api_ip));
+    printf("API Server IP: %s\n", ipaddr_ntoa(&api_ip));
     HAL_IWDG_Refresh(&hiwdg1);
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_init();
     sntp_setservername(0, "ntp.aliyun.com");
     BME280_Config(OSRS_2, OSRS_16, OSRS_1, MODE_NORMAL, T_SB_0p5, IIR_16);
-    struct udp_pcb *udp_pcb = udp_new();
-    udp_bind(udp_pcb, IP_ADDR_ANY, 8668);
-    udp_recv(udp_pcb, udp_receive_callback, NULL);
+    struct udp_pcb *udp_pcb = udp_new_ip6();
+    if (udp_pcb) {
+        if (udp_bind(udp_pcb, IP6_ADDR_ANY, 8668) == ERR_OK) {
+            udp_recv(udp_pcb, udp_receive_callback, NULL);
+        } else {
+            printf("创建udp失败\n");
+            udp_remove(udp_pcb);
+            NVIC_SystemReset();
+        }
+    }
     /* USER CODE END 2 */
 
     /* Infinite loop */
@@ -231,7 +278,6 @@ int main(void) {
 
         /* USER CODE BEGIN 3 */
         MX_LWIP_Process();
-        HAL_IWDG_Refresh(&hiwdg1);
         for (int i = 0; i < 499999; ++i) {
             MX_LWIP_Process();
         }
@@ -248,6 +294,8 @@ int main(void) {
         cJSON_AddNumberToObject(root, "temperature", temperatureRounded);
         cJSON_AddNumberToObject(root, "humidity", humidityRounded);
         cJSON_AddNumberToObject(root, "pressure", pressureRounded);
+        cJSON_AddNumberToObject(root, "packetSeq", ++packet_seq);
+        cJSON_AddStringToObject(root, "cmd", "ping");
         char time_str[20];
         sprintf(time_str, "20%02d-%02d-%02d %02d:%02d:%02d",
                 rtcTime.year, rtcTime.month, rtcTime.date,

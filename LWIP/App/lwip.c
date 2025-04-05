@@ -49,6 +49,7 @@ struct netif gnetif;
 ip4_addr_t ipaddr;
 ip4_addr_t netmask;
 ip4_addr_t gw;
+ip6_addr_t ip6addr;
 
 /* USER CODE BEGIN 2 */
 
@@ -70,6 +71,11 @@ void MX_LWIP_Init(void)
   /* add the network interface (IPv4/IPv6) without RTOS */
   netif_add(&gnetif, &ipaddr, &netmask, &gw, NULL, &ethernetif_init, &ethernet_input);
 
+  /* Create IPv6 local address */
+  netif_create_ip6_linklocal_address(&gnetif, 0);
+  netif_ip6_addr_set_state(&gnetif, 0, IP6_ADDR_VALID);
+  gnetif.ip6_autoconfig_enabled = 1;
+
   /* Registers the default network interface */
   netif_set_default(&gnetif);
 
@@ -83,7 +89,7 @@ void MX_LWIP_Init(void)
   dhcp_start(&gnetif);
 
 /* USER CODE BEGIN 3 */
-
+  gnetif.flags |= NETIF_FLAG_MLD6;
 /* USER CODE END 3 */
 }
 

@@ -27,13 +27,13 @@ extern "C" {
 #endif
 
 /* Includes ------------------------------------------------------------------*/
-#include <sys/time.h>
+
 
 #include "stm32h7xx_hal.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <sys/time.h>
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
