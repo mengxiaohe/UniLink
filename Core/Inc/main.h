@@ -27,6 +27,8 @@ extern "C" {
 #endif
 
 /* Includes ------------------------------------------------------------------*/
+#include <sys/time.h>
+
 #include "stm32h7xx_hal.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -41,12 +43,14 @@ extern "C" {
 
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
+void set_system_time(time_t seconds);
 
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
-
+#define SNTP_SERVER_DNS            1
+#define SNTP_SET_SYSTEM_TIME		set_system_time
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/

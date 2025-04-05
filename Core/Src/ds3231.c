@@ -30,7 +30,9 @@ void DS3231_WriteOneByte(const uint8_t reg, uint8_t data) {
 // 从DS3231指定寄存器读一个字节
 uint8_t DS3231_ReadOneByte(const uint8_t reg) {
     uint8_t data;
-    HAL_I2C_Mem_Read(&hi2c1, DS3231_ADDRESS, reg, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
+    if (HAL_OK != HAL_I2C_Mem_Read(&hi2c1, DS3231_ADDRESS, reg, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000)) {
+        printf("Failed to read from DS3231\n");
+    }
     return data;
 }
 

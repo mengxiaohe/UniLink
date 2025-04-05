@@ -31,9 +31,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "at24c32.h"
 #include "bme280.h"
+#include "cJSON.h"
 #include "dns_resolver.h"
 #include "ds3231.h"
+#include "sntp.h"
 #include "prot/dhcp.h"
 /* USER CODE END Includes */
 
@@ -65,6 +68,8 @@ void SystemClock_Config(void);
 static void MPU_Config(void);
 
 /* USER CODE BEGIN PFP */
+
+
 #define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
 PUTCHAR_PROTOTYPE {
     HAL_UART_Transmit(&huart1, (uint8_t *) &ch, 1, 0xFFFF);
@@ -92,7 +97,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
                 }
                 if (strncmp(rxBuffer, "pressure", rxIndex) == 0) {
                     BME280_Measure();
-                    printf("Pressure:%.0f\n", Pressure/100);
+                    printf("Pressure:%.0f\n", Pressure / 100);
                 } else if (strncmp(rxBuffer, "time", rxIndex) == 0) {
                     DS3231_TimeType rtcTime;
                     DS3231_GetTime(&rtcTime);
@@ -112,6 +117,37 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
         // 继续接收下一个字节
         HAL_UART_Receive_IT(huart, &uartReceiveByte, 1);
     }
+}
+
+void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
+    if (p == NULL) return;
+    // 优化1: 使用固定缓冲区防止溢出
+    char buffer[128];
+    // 优化2: 安全拷贝数据并添加终止符
+    const u16_t len = pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
+    buffer[len > sizeof(buffer) - 1 ? sizeof(buffer) - 1 : len] = '\0';
+    // 优化3: 添加来源信息并限制输出长度
+    printf("UDP[%s:%d] %.*s\n", ipaddr_ntoa(addr), port, (int) sizeof(buffer), buffer);
+    // 优化4: 提前释放pbuf资源
+    pbuf_free(p);
+}
+
+
+void set_system_time(const time_t seconds) {
+    // 设置时区为 GMT+8
+    setenv("TZ", "UTC-8", 1);
+    tzset(); // 应用新的时区设置
+    const struct tm *time_info = localtime(&seconds);
+    DS3231_TimeType rtcTime;
+    // 转换tm结构体到RTC时间格式
+    rtcTime.seconds = time_info->tm_sec;
+    rtcTime.minutes = time_info->tm_min;
+    rtcTime.hours = time_info->tm_hour;
+    rtcTime.day = time_info->tm_wday;
+    rtcTime.date = time_info->tm_mday;
+    rtcTime.month = time_info->tm_mon + 1;
+    rtcTime.year = time_info->tm_year - 100;
+    DS3231_SetTime(&rtcTime);
 }
 
 /* USER CODE END PFP */
@@ -158,6 +194,10 @@ int main(void) {
     MX_IWDG1_Init();
     /* USER CODE BEGIN 2 */
     HAL_UART_Receive_IT(&huart1, &uartReceiveByte, 1);
+    if (HAL_OK != EEPROM_Init(&hi2c1)) {
+        printf("初始化eeprom失败\n");
+        NVIC_SystemReset();
+    }
     DS3231_TimeType rtcTime;
     DS3231_GetTime(&rtcTime);
     printf("20%02d-%02d-%02d %02d:%02d:%02d\r\n",
@@ -175,41 +215,53 @@ int main(void) {
     const ip_addr_t api_ip = get_api_ip();
     printf("API Server IP: %s\n", ip4addr_ntoa(&api_ip));
     HAL_IWDG_Refresh(&hiwdg1);
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_init();
+    sntp_setservername(0, "ntp.aliyun.com");
     BME280_Config(OSRS_2, OSRS_16, OSRS_1, MODE_NORMAL, T_SB_0p5, IIR_16);
-    ip_addr_t PC_IPADDR;
-    IP_ADDR4(&PC_IPADDR, 192, 168, 20, 166);
-
-    struct udp_pcb *my_udp = udp_new();
-    udp_connect(my_udp, &PC_IPADDR, 8987);
-    struct pbuf *udp_buffer = NULL;
-
-
+    struct udp_pcb *udp_pcb = udp_new();
+    udp_bind(udp_pcb, IP_ADDR_ANY, 8668);
+    udp_recv(udp_pcb, udp_receive_callback, NULL);
     /* USER CODE END 2 */
 
     /* Infinite loop */
     /* USER CODE BEGIN WHILE */
     while (1) {
-        char buffer[100];
         /* USER CODE END WHILE */
 
         /* USER CODE BEGIN 3 */
         MX_LWIP_Process();
-        HAL_IWDG_Refresh(&hiwdg1);
         HAL_IWDG_Refresh(&hiwdg1);
         for (int i = 0; i < 499999; ++i) {
             MX_LWIP_Process();
         }
         DS3231_GetTime(&rtcTime);
         BME280_Measure();
-        sprintf(buffer, "Hello UDP message! 20%02d-%02d-%02d %02d:%02d:%02d\n\r",
+        cJSON *root = cJSON_CreateObject();
+        char sn_str[16];
+        snprintf(sn_str, sizeof(sn_str), "%08X%08X%08X",
+                 HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2());
+        cJSON_AddStringToObject(root, "sn", sn_str);
+        const double temperatureRounded = round((double) Temperature * 10) / 10.0;
+        const double humidityRounded = round((double) Humidity * 10) / 10.0;
+        const int pressureRounded = (int) roundf(Pressure / 100);
+        cJSON_AddNumberToObject(root, "temperature", temperatureRounded);
+        cJSON_AddNumberToObject(root, "humidity", humidityRounded);
+        cJSON_AddNumberToObject(root, "pressure", pressureRounded);
+        char time_str[20];
+        sprintf(time_str, "20%02d-%02d-%02d %02d:%02d:%02d",
                 rtcTime.year, rtcTime.month, rtcTime.date,
                 rtcTime.hours, rtcTime.minutes, rtcTime.seconds);
-        udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(buffer), PBUF_RAM);
+        cJSON_AddStringToObject(root, "time", time_str);
+        char *json_str = cJSON_PrintUnformatted(root);
+        struct pbuf *udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(json_str), PBUF_RAM);
         if (udp_buffer != NULL) {
-            memcpy(udp_buffer->payload, buffer, strlen(buffer));
-            udp_send(my_udp, udp_buffer);
+            memcpy(udp_buffer->payload, json_str, strlen(json_str));
+            udp_sendto(udp_pcb, udp_buffer, &api_ip, 8667);
             pbuf_free(udp_buffer);
         }
+        cJSON_Delete(root);
+        free(json_str);
     }
     /* USER CODE END 3 */
 }
@@ -297,29 +349,6 @@ void MPU_Config(void) {
     MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
     MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
     MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
-
-    HAL_MPU_ConfigRegion(&MPU_InitStruct);
-
-    /** Initializes and configures the Region and the memory to be protected
-    */
-    MPU_InitStruct.Number = MPU_REGION_NUMBER1;
-    MPU_InitStruct.BaseAddress = 0x30020000;
-    MPU_InitStruct.Size = MPU_REGION_SIZE_128KB;
-    MPU_InitStruct.SubRegionDisable = 0x0;
-    MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
-    MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
-    MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
-
-    HAL_MPU_ConfigRegion(&MPU_InitStruct);
-
-    /** Initializes and configures the Region and the memory to be protected
-    */
-    MPU_InitStruct.Number = MPU_REGION_NUMBER2;
-    MPU_InitStruct.BaseAddress = 0x30040000;
-    MPU_InitStruct.Size = MPU_REGION_SIZE_512B;
-    MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
-    MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
-    MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
 
     HAL_MPU_ConfigRegion(&MPU_InitStruct);
     /* Enables the MPU */
