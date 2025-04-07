@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "crc.h"
 #include "dma.h"
 #include "i2c.h"
 #include "iwdg.h"
@@ -34,6 +35,7 @@
 #include "at24c32.h"
 #include "bme280.h"
 #include "cJSON.h"
+#include "crc16_modbus.h"
 #include "dns_resolver.h"
 #include "ds3231.h"
 #include "sntp.h"
@@ -120,33 +122,39 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     }
 }
 
-void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
-    if (p == NULL) return;
-    // 优化1: 使用固定缓冲区防止溢出
-    char buffer[1473];
-    // 优化2: 安全拷贝数据并添加终止符
-    const u16_t len = pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
-    buffer[len > sizeof(buffer) - 1 ? sizeof(buffer) - 1 : len] = '\0';
-    cJSON *packet = cJSON_Parse(buffer);
-    pbuf_free(p);
-    if (packet == NULL) {
-        const char *error_ptr = cJSON_GetErrorPtr();
-        if (error_ptr != NULL) {
-            printf("JSON 解析错误 UDP[%s:%d] %.*s\n", ipaddr_ntoa(addr), port, (int) sizeof(buffer), buffer);
-        }
-        return;
+uint32_t CRC_Calculate(uint32_t mark, char text[], uint16_t len) {
+    HAL_CRC_Calculate(&hcrc, &mark, 4);
+    HAL_CRC_Accumulate(&hcrc, (uint32_t *) &len, 2);
+    return HAL_CRC_Accumulate(&hcrc, (uint32_t *) text, len);
+}
+
+void read_all_eeprom(void) {
+    printf("读取全部数据\n");
+    uint8_t temp[4096];
+    EEPROM_Read(0, temp, sizeof(temp));
+    for (int i = 0; i < 4096; ++i) {
+        printf("%02X ", temp[i]);
     }
-    char sn_str[16];
-    snprintf(sn_str, sizeof(sn_str), "%08X%08X%08X",
+    printf("\n");
+}
+
+void clear_all_eeprom(void) {
+    printf("开始清除eeprom数据\n");
+    const u_int8_t empty_data[4096] = {0x00};
+    EEPROM_Write(0, empty_data, sizeof(empty_data));
+}
+
+void packet_process(struct udp_pcb *pcb, const ip_addr_t *addr, u16_t port, cJSON *packet) {
+    char sn[16];
+    snprintf(sn, sizeof(sn), "%08X%08X%08X",
              HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2());
     const cJSON *sn_item = cJSON_GetObjectItemCaseSensitive(packet, "sn");
-    if (!cJSON_IsString(sn_item)) {
-        cJSON_Delete(packet);
+    const cJSON *packetSeq_item = cJSON_GetObjectItemCaseSensitive(packet, "packetSeq");
+    if (!cJSON_IsNumber(packetSeq_item)) {
         return;
     }
-    const char *sn = cJSON_GetStringValue(sn_item);
-    if (sn == NULL || strcmp(sn_str, sn) != 0) {
-        cJSON_Delete(packet);
+    const uint32_t packetSeq = packetSeq_item->valueint;
+    if (strcmp(sn, cJSON_GetStringValue(sn_item)) != 0) {
         return;
     }
     const cJSON *cmd_item = cJSON_GetObjectItemCaseSensitive(packet, "cmd");
@@ -164,9 +172,94 @@ void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p, const 
                        rtcTime.hours, rtcTime.minutes, rtcTime.seconds);
             } else if (strcmp(cmd, "pong") == 0) {
                 HAL_IWDG_Refresh(&hiwdg1);
+            } else if (strcmp(cmd, "get_config") == 0) {
+                uint32_t mark;
+                EEPROM_Read(0, (uint8_t *) &mark, sizeof(mark));
+                uint16_t len;
+                EEPROM_Read(sizeof(mark), (uint8_t *) &len, sizeof(len));
+                cJSON *data = cJSON_CreateObject();
+                cJSON_AddNumberToObject(data, "packetSeq", ++packet_seq);
+                cJSON_AddNumberToObject(data, "ackPacketSeq", packetSeq);
+                cJSON_AddStringToObject(data, "cmd", "get_config_ack");
+                cJSON_AddStringToObject(data, "sn", sn);
+                if (0xFEFCDDDC != mark || len > 4096) {
+                    cJSON_AddStringToObject(data, "data", "ERROR");
+                } else {
+                    u_int8_t text[len];
+                    EEPROM_Read(sizeof(mark) + sizeof(len), (uint8_t *) &text, len);
+                    uint16_t read_crc;
+                    EEPROM_Read(sizeof(mark) + sizeof(len) + len, (uint8_t *) &read_crc, sizeof(read_crc));
+                    uint32_t calculated_crc = CRC_Calculate(mark, text, len);
+                    if (read_crc != calculated_crc) {
+                        cJSON_AddStringToObject(data, "data", "CRC_ERROR");
+                    } else {
+                        cJSON_AddStringToObject(data, "data", text);
+                    }
+                }
+                char *json_str = cJSON_PrintUnformatted(data);
+                struct pbuf *udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(json_str), PBUF_RAM);
+                if (udp_buffer != NULL) {
+                    memcpy(udp_buffer->payload, json_str, strlen(json_str));
+                    udp_sendto(pcb, udp_buffer, addr, port);
+                    pbuf_free(udp_buffer);
+                }
+                free(json_str);
+                cJSON_Delete(data);
+            } else if (strcmp(cmd, "set_config") == 0) {
+                HAL_IWDG_Refresh(&hiwdg1);
+                const cJSON *data_item = cJSON_GetObjectItemCaseSensitive(packet, "data");
+                if (cJSON_IsString(data_item)) {
+                    const char *text_str = cJSON_GetStringValue(data_item);
+                    uint32_t mark = 0xFEFCDDDC;
+                    uint16_t len = strlen(text_str) + 1;
+                    // 分配内存，包含终止符
+                    u_int8_t text[len];
+                    memcpy(text, text_str, len); // 复制数据
+                    uint32_t calculated_crc = CRC_Calculate(mark, text, len);
+                    EEPROM_Write(0, (uint8_t *) &mark, sizeof(mark));
+                    EEPROM_Write(sizeof(mark), (uint8_t *) &len, sizeof(len));
+                    EEPROM_Write(sizeof(mark) + sizeof(len), (uint8_t *) &text, len);
+                    EEPROM_Write(sizeof(mark) + sizeof(len) + len, (uint8_t *) &calculated_crc, sizeof(calculated_crc));
+                }
+                cJSON *data = cJSON_CreateObject();
+                cJSON_AddNumberToObject(data, "packetSeq", ++packet_seq);
+                cJSON_AddNumberToObject(data, "ackPacketSeq", packetSeq);
+                cJSON_AddStringToObject(data, "cmd", "set_config_ack");
+                cJSON_AddStringToObject(data, "data", "ok");
+                cJSON_AddStringToObject(data, "sn", sn);
+                HAL_IWDG_Refresh(&hiwdg1);
+                char *json_str = cJSON_PrintUnformatted(data);
+                struct pbuf *udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(json_str), PBUF_RAM);
+                if (udp_buffer != NULL) {
+                    memcpy(udp_buffer->payload, json_str, strlen(json_str));
+                    udp_sendto(pcb, udp_buffer, addr, port);
+                    pbuf_free(udp_buffer);
+                }
+                HAL_IWDG_Refresh(&hiwdg1);
+                free(json_str);
+                cJSON_Delete(data);
             }
         }
     }
+}
+
+void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
+    if (p == NULL) return;
+    // 优化1: 使用固定缓冲区防止溢出
+    char buffer[1473];
+    // 优化2: 安全拷贝数据并添加终止符
+    const u16_t len = pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
+    buffer[len > sizeof(buffer) - 1 ? sizeof(buffer) - 1 : len] = '\0';
+    cJSON *packet = cJSON_Parse(buffer);
+    pbuf_free(p);
+    if (packet == NULL) {
+        const char *error_ptr = cJSON_GetErrorPtr();
+        if (error_ptr != NULL) {
+            printf("JSON 解析错误 UDP[%s:%d] %.*s\n", ipaddr_ntoa(addr), port, (int) sizeof(buffer), buffer);
+        }
+        return;
+    }
+    packet_process(pcb, addr, port, packet);
     cJSON_Delete(packet);
 }
 
@@ -192,6 +285,7 @@ void set_system_time(const time_t seconds) {
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
 
 /* USER CODE END 0 */
 
@@ -230,6 +324,7 @@ int main(void) {
     MX_I2C1_Init();
     MX_LWIP_Init();
     MX_IWDG1_Init();
+    MX_CRC_Init();
     /* USER CODE BEGIN 2 */
     HAL_UART_Receive_IT(&huart1, &uartReceiveByte, 1);
     if (HAL_OK != EEPROM_Init(&hi2c1)) {
@@ -255,6 +350,7 @@ int main(void) {
     const ip_addr_t api_ip = get_api_ip();
     printf("API Server IP: %s\n", ipaddr_ntoa(&api_ip));
     HAL_IWDG_Refresh(&hiwdg1);
+
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_init();
     sntp_setservername(0, "ntp.aliyun.com");
@@ -283,32 +379,32 @@ int main(void) {
         }
         DS3231_GetTime(&rtcTime);
         BME280_Measure();
-        cJSON *root = cJSON_CreateObject();
+        cJSON *packet = cJSON_CreateObject();
         char sn_str[16];
         snprintf(sn_str, sizeof(sn_str), "%08X%08X%08X",
                  HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2());
-        cJSON_AddStringToObject(root, "sn", sn_str);
+        cJSON_AddStringToObject(packet, "sn", sn_str);
         const double temperatureRounded = round((double) Temperature * 10) / 10.0;
         const double humidityRounded = round((double) Humidity * 10) / 10.0;
         const int pressureRounded = (int) roundf(Pressure / 100);
-        cJSON_AddNumberToObject(root, "temperature", temperatureRounded);
-        cJSON_AddNumberToObject(root, "humidity", humidityRounded);
-        cJSON_AddNumberToObject(root, "pressure", pressureRounded);
-        cJSON_AddNumberToObject(root, "packetSeq", ++packet_seq);
-        cJSON_AddStringToObject(root, "cmd", "ping");
+        cJSON_AddNumberToObject(packet, "temperature", temperatureRounded);
+        cJSON_AddNumberToObject(packet, "humidity", humidityRounded);
+        cJSON_AddNumberToObject(packet, "pressure", pressureRounded);
+        cJSON_AddNumberToObject(packet, "packetSeq", ++packet_seq);
+        cJSON_AddStringToObject(packet, "cmd", "ping");
         char time_str[20];
         sprintf(time_str, "20%02d-%02d-%02d %02d:%02d:%02d",
                 rtcTime.year, rtcTime.month, rtcTime.date,
                 rtcTime.hours, rtcTime.minutes, rtcTime.seconds);
-        cJSON_AddStringToObject(root, "time", time_str);
-        char *json_str = cJSON_PrintUnformatted(root);
+        cJSON_AddStringToObject(packet, "time", time_str);
+        char *json_str = cJSON_PrintUnformatted(packet);
         struct pbuf *udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(json_str), PBUF_RAM);
         if (udp_buffer != NULL) {
             memcpy(udp_buffer->payload, json_str, strlen(json_str));
             udp_sendto(udp_pcb, udp_buffer, &api_ip, 8667);
             pbuf_free(udp_buffer);
         }
-        cJSON_Delete(root);
+        cJSON_Delete(packet);
         free(json_str);
     }
     /* USER CODE END 3 */

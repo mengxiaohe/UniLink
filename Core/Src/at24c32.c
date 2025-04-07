@@ -4,7 +4,6 @@
 #include <at24c32.h>
 
 
-
 static I2C_HandleTypeDef *eeprom_hi2c = NULL; // I2C句柄指针
 
 // 初始化I2C句柄，传入空指针返回错误
@@ -46,6 +45,67 @@ HAL_StatusTypeDef EEPROM_Read(const uint16_t memAddr, uint8_t *data, const uint1
                             I2C_MEMADD_SIZE_16BIT, data, size, 400);
 }
 
+/*uint32_t CRC_Calculate(uint32_t mark, char text[], uint16_t len) {
+    HAL_CRC_Calculate(&hcrc, &mark, 4);
+    HAL_CRC_Accumulate(&hcrc, (uint32_t *) &len, 2);
+    return HAL_CRC_Accumulate(&hcrc, (uint32_t *) text, len);
+}
+
+void read_all_eeprom(void) {
+    printf("读取全部数据\n");
+    uint8_t temp[4096];
+    EEPROM_Read(0, temp, sizeof(temp));
+    for (int i = 0; i < 4096; ++i) {
+        printf("%02X ", temp[i]);
+    }
+    printf("\n");
+}
+
+void clear_all_eeprom(void) {
+    printf("开始清除eeprom数据\n");
+    const u_int8_t empty_data[4096] = {0x00};
+    EEPROM_Write(0, empty_data, sizeof(empty_data));
+}
+
+void read_eeprom(void) {
+    uint32_t mark;
+    EEPROM_Read(0, (uint8_t *) &mark, sizeof(mark));
+    uint16_t len;
+    EEPROM_Read(sizeof(mark), (uint8_t *) &len, sizeof(len));
+    u_int8_t text[len];
+    EEPROM_Read(6, (uint8_t *) &text, len);
+    uint16_t read_crc;
+    EEPROM_Read(sizeof(mark) + sizeof(len) + len, (uint8_t *) &read_crc, sizeof(read_crc));
+    printf("read_crc:%04X\n", read_crc);
+    uint32_t calculated_crc = CRC_Calculate(mark, text, len);
+    printf("计算crc:%04X\n", calculated_crc);
+    cJSON *packet = cJSON_Parse(text);
+
+    if (packet == NULL) {
+        const char *error_ptr = cJSON_GetErrorPtr();
+        if (error_ptr != NULL) {
+            printf("JSON 解析错误\n");
+        }
+        return;
+    }
+    char *json_str = cJSON_PrintUnformatted(packet);
+    printf("%s\n",json_str);
+    free(json_str);
+    cJSON_Delete(packet);
+}
+
+
+void write_eeprom(void) {
+    uint32_t mark = 0xFEFCDDDC;
+    u_int8_t text[] =
+            "{\"proxies\":{\"default\":{\"httpProxy\":\"http://127.0.0.1:9033\",\"httpsProxy\":\"http://127.0.0.1:9033\",\"noProxy\":\"*.test.example.com,.example.org,127.0.0.0/8\"}}}";
+    uint16_t len = sizeof(text);
+    uint32_t calculated_crc = CRC_Calculate(mark, text, len);
+    EEPROM_Write(0, (uint8_t *) &mark, sizeof(mark));
+    EEPROM_Write(sizeof(mark), (uint8_t *) &len, sizeof(len));
+    EEPROM_Write(sizeof(mark) + sizeof(len), (uint8_t *) &text, len);
+    EEPROM_Write(sizeof(mark) + sizeof(len) + len, (uint8_t *) &calculated_crc, sizeof(calculated_crc));
+}*/
 #ifndef NO_EXAMPLES
 void at24c32_example() {
     // 使用字符串常量，便于计算实际长度（包含结束符'\0'）
