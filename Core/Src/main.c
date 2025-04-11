@@ -144,6 +144,19 @@ void clear_all_eeprom(void) {
     EEPROM_Write(0, empty_data, sizeof(empty_data));
 }
 
+void send(struct udp_pcb *pcb, const ip_addr_t *addr, u16_t port, cJSON *data) {
+    char *json_str = cJSON_PrintUnformatted(data);
+    struct pbuf *udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(json_str), PBUF_RAM);
+    if (udp_buffer != NULL) {
+        memcpy(udp_buffer->payload, json_str, strlen(json_str));
+        udp_sendto(pcb, udp_buffer, addr, port);
+        pbuf_free(udp_buffer);
+    }
+    HAL_IWDG_Refresh(&hiwdg1);
+    free(json_str);
+    cJSON_Delete(data);
+}
+
 void packet_process(struct udp_pcb *pcb, const ip_addr_t *addr, u16_t port, cJSON *packet) {
     char sn[16];
     snprintf(sn, sizeof(sn), "%08X%08X%08X",
@@ -196,15 +209,7 @@ void packet_process(struct udp_pcb *pcb, const ip_addr_t *addr, u16_t port, cJSO
                         cJSON_AddStringToObject(data, "data", text);
                     }
                 }
-                char *json_str = cJSON_PrintUnformatted(data);
-                struct pbuf *udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(json_str), PBUF_RAM);
-                if (udp_buffer != NULL) {
-                    memcpy(udp_buffer->payload, json_str, strlen(json_str));
-                    udp_sendto(pcb, udp_buffer, addr, port);
-                    pbuf_free(udp_buffer);
-                }
-                free(json_str);
-                cJSON_Delete(data);
+                send(pcb, addr, port, data);
             } else if (strcmp(cmd, "set_config") == 0) {
                 HAL_IWDG_Refresh(&hiwdg1);
                 const cJSON *data_item = cJSON_GetObjectItemCaseSensitive(packet, "data");
@@ -228,16 +233,7 @@ void packet_process(struct udp_pcb *pcb, const ip_addr_t *addr, u16_t port, cJSO
                 cJSON_AddStringToObject(data, "data", "ok");
                 cJSON_AddStringToObject(data, "sn", sn);
                 HAL_IWDG_Refresh(&hiwdg1);
-                char *json_str = cJSON_PrintUnformatted(data);
-                struct pbuf *udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(json_str), PBUF_RAM);
-                if (udp_buffer != NULL) {
-                    memcpy(udp_buffer->payload, json_str, strlen(json_str));
-                    udp_sendto(pcb, udp_buffer, addr, port);
-                    pbuf_free(udp_buffer);
-                }
-                HAL_IWDG_Refresh(&hiwdg1);
-                free(json_str);
-                cJSON_Delete(data);
+                send(pcb, addr, port, data);
             }
         }
     }
@@ -344,7 +340,6 @@ int main(void) {
     HAL_IWDG_Refresh(&hiwdg1);
     printf("IPv4 Address:%s\n", ip4addr_ntoa(netif_ip4_addr(&gnetif)));
     printf("IPv6 Address:%s \n", ip6addr_ntoa(netif_ip6_addr(&gnetif, 1)));
-
     const ip_addr_t ntp_ip = get_ntp_ip();
     printf("NTP Server IP: %s\n", ipaddr_ntoa(&ntp_ip));
     const ip_addr_t api_ip = get_api_ip();
