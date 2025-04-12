@@ -38,6 +38,7 @@
 #include "crc16_modbus.h"
 #include "dns_resolver.h"
 #include "ds3231.h"
+#include "SHTC3.h"
 #include "sntp.h"
 #include "prot/dhcp.h"
 /* USER CODE END Includes */
@@ -321,6 +322,7 @@ int main(void) {
     MX_LWIP_Init();
     MX_IWDG1_Init();
     MX_CRC_Init();
+    MX_I2C3_Init();
     /* USER CODE BEGIN 2 */
     HAL_UART_Receive_IT(&huart1, &uartReceiveByte, 1);
     if (HAL_OK != EEPROM_Init(&hi2c1)) {
@@ -345,7 +347,20 @@ int main(void) {
     const ip_addr_t api_ip = get_api_ip();
     printf("API Server IP: %s\n", ipaddr_ntoa(&api_ip));
     HAL_IWDG_Refresh(&hiwdg1);
-
+    if (HAL_OK != SHTC3_SoftReset()) {
+        printf("复位SHTC3失败\n");
+        NVIC_SystemReset();
+    }
+    if (HAL_OK != SHTC3_Wakeup()) {
+        printf("唤醒SHTC3失败\n");
+        NVIC_SystemReset();
+    }
+    uint16_t id;
+    if (HAL_OK != SHTC3_GetId(&id)) {
+        printf("读取SHTC3 ID失败\n");
+        NVIC_SystemReset();
+    }
+    printf("SHTC3 ID:%x\n", id);
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_init();
     sntp_setservername(0, "ntp.aliyun.com");
@@ -372,6 +387,10 @@ int main(void) {
         for (int i = 0; i < 499999; ++i) {
             MX_LWIP_Process();
         }
+        float temp, humi;
+        if (HAL_OK != SHTC3_Wakeup() || HAL_OK != SHTC3_GetTempAndHumi(&temp, &humi)) {
+            temp = 0, humi = 0;
+        }
         DS3231_GetTime(&rtcTime);
         BME280_Measure();
         cJSON *packet = cJSON_CreateObject();
@@ -379,8 +398,8 @@ int main(void) {
         snprintf(sn_str, sizeof(sn_str), "%08X%08X%08X",
                  HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2());
         cJSON_AddStringToObject(packet, "sn", sn_str);
-        const double temperatureRounded = round((double) Temperature * 10) / 10.0;
-        const double humidityRounded = round((double) Humidity * 10) / 10.0;
+        const double temperatureRounded = round((double) temp * 10) / 10.0;
+        const double humidityRounded = round((double) humi * 10) / 10.0;
         const int pressureRounded = (int) roundf(Pressure / 100);
         cJSON_AddNumberToObject(packet, "temperature", temperatureRounded);
         cJSON_AddNumberToObject(packet, "humidity", humidityRounded);
