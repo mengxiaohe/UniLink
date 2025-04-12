@@ -80,11 +80,23 @@ PUTCHAR_PROTOTYPE {
 }
 
 float Temperature, Pressure, Humidity;
+
 uint32_t packet_seq = 0;
 #define BUFFER_SIZE 64    // 定义接收缓冲区大小
 uint8_t rxIndex = 0;
 char rxBuffer[BUFFER_SIZE];
 uint8_t uartReceiveByte;
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == GPIO_PIN_10) {
+        printf("EXTI15_10 Triggered!\n");
+        // 添加业务逻辑（如翻转LED）
+        DS3231_StatusReg_t ds3231_status_reg;
+        DS3231_ReadStatusReg(&ds3231_status_reg);
+        ds3231_status_reg.bits.A1F = 0;
+        DS3231_WriteStatusReg(&ds3231_status_reg);
+    }
+}
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart->Instance == USART1) {
@@ -106,8 +118,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
                     DS3231_TimeType rtcTime;
                     DS3231_GetTime(&rtcTime);
                     printf("Time:20%02d-%02d-%02d %02d:%02d:%02d\n",
-                           rtcTime.year, rtcTime.month, rtcTime.date,
-                           rtcTime.hours, rtcTime.minutes, rtcTime.seconds);
+                           rtcTime.year, rtcTime.moon, rtcTime.day,
+                           rtcTime.hour, rtcTime.min, rtcTime.sec);
                 } else {
                     printf("%.*s\r\n", rxIndex, rxBuffer);
                 }
@@ -123,27 +135,12 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     }
 }
 
-uint32_t CRC_Calculate(uint32_t mark, char text[], uint16_t len) {
+uint16_t CRC_Calculate(uint32_t mark, char text[], uint32_t len) {
     HAL_CRC_Calculate(&hcrc, &mark, 4);
-    HAL_CRC_Accumulate(&hcrc, (uint32_t *) &len, 2);
+    HAL_CRC_Accumulate(&hcrc, &len, 2);
     return HAL_CRC_Accumulate(&hcrc, (uint32_t *) text, len);
 }
 
-void read_all_eeprom(void) {
-    printf("读取全部数据\n");
-    uint8_t temp[4096];
-    EEPROM_Read(0, temp, sizeof(temp));
-    for (int i = 0; i < 4096; ++i) {
-        printf("%02X ", temp[i]);
-    }
-    printf("\n");
-}
-
-void clear_all_eeprom(void) {
-    printf("开始清除eeprom数据\n");
-    const u_int8_t empty_data[4096] = {0x00};
-    EEPROM_Write(0, empty_data, sizeof(empty_data));
-}
 
 void send(struct udp_pcb *pcb, const ip_addr_t *addr, u16_t port, cJSON *data) {
     char *json_str = cJSON_PrintUnformatted(data);
@@ -182,8 +179,8 @@ void packet_process(struct udp_pcb *pcb, const ip_addr_t *addr, u16_t port, cJSO
                 DS3231_TimeType rtcTime;
                 DS3231_GetTime(&rtcTime);
                 printf("Time:20%02d-%02d-%02d %02d:%02d:%02d\n",
-                       rtcTime.year, rtcTime.month, rtcTime.date,
-                       rtcTime.hours, rtcTime.minutes, rtcTime.seconds);
+                       rtcTime.year, rtcTime.moon, rtcTime.day,
+                       rtcTime.hour, rtcTime.min, rtcTime.sec);
             } else if (strcmp(cmd, "pong") == 0) {
                 HAL_IWDG_Refresh(&hiwdg1);
             } else if (strcmp(cmd, "get_config") == 0) {
@@ -203,7 +200,7 @@ void packet_process(struct udp_pcb *pcb, const ip_addr_t *addr, u16_t port, cJSO
                     EEPROM_Read(sizeof(mark) + sizeof(len), (uint8_t *) &text, len);
                     uint16_t read_crc;
                     EEPROM_Read(sizeof(mark) + sizeof(len) + len, (uint8_t *) &read_crc, sizeof(read_crc));
-                    uint32_t calculated_crc = CRC_Calculate(mark, text, len);
+                    uint16_t calculated_crc = CRC_Calculate(mark, text, len);
                     if (read_crc != calculated_crc) {
                         cJSON_AddStringToObject(data, "data", "CRC_ERROR");
                     } else {
@@ -221,7 +218,7 @@ void packet_process(struct udp_pcb *pcb, const ip_addr_t *addr, u16_t port, cJSO
                     // 分配内存，包含终止符
                     u_int8_t text[len];
                     memcpy(text, text_str, len); // 复制数据
-                    uint32_t calculated_crc = CRC_Calculate(mark, text, len);
+                    uint16_t calculated_crc = CRC_Calculate(mark, text, len);
                     EEPROM_Write(0, (uint8_t *) &mark, sizeof(mark));
                     EEPROM_Write(sizeof(mark), (uint8_t *) &len, sizeof(len));
                     EEPROM_Write(sizeof(mark) + sizeof(len), (uint8_t *) &text, len);
@@ -268,14 +265,18 @@ void set_system_time(const time_t seconds, uint32_t us) {
     const struct tm *time_info = localtime(&seconds);
     DS3231_TimeType rtcTime;
     // 转换tm结构体到RTC时间格式
-    rtcTime.seconds = time_info->tm_sec;
-    rtcTime.minutes = time_info->tm_min;
-    rtcTime.hours = time_info->tm_hour;
-    rtcTime.day = time_info->tm_wday;
-    rtcTime.date = time_info->tm_mday;
-    rtcTime.month = time_info->tm_mon + 1;
+    rtcTime.sec = time_info->tm_sec;
+    rtcTime.min = time_info->tm_min;
+    rtcTime.hour = time_info->tm_hour;
+    rtcTime.week = time_info->tm_wday;
+    rtcTime.day = time_info->tm_mday;
+    rtcTime.moon = time_info->tm_mon + 1;
     rtcTime.year = time_info->tm_year - 100;
-    DS3231_SetTime(&rtcTime);
+    if (HAL_OK == DS3231_SetTime(&rtcTime)) {
+        printf("ntp同步时间成功\n");
+    } else {
+        printf("ntp同步时间失败\n");
+    }
 }
 
 /* USER CODE END PFP */
@@ -304,13 +305,13 @@ int main(void) {
     HAL_Init();
 
     /* USER CODE BEGIN Init */
-
     /* USER CODE END Init */
 
     /* Configure the system clock */
     SystemClock_Config();
 
     /* USER CODE BEGIN SysInit */
+
 
     /* USER CODE END SysInit */
 
@@ -329,11 +330,16 @@ int main(void) {
         printf("初始化eeprom失败\n");
         NVIC_SystemReset();
     }
+    DS3231_ControlReg_t ds3231_control_reg;
+    if (HAL_OK == DS3231_ReadControlReg(&ds3231_control_reg)) {
+        DS3231_SetAlarm1(0, 0, 0, 1, 0x0E);
+    }
+    DS3231_ReadSQWConfig();
     DS3231_TimeType rtcTime;
     DS3231_GetTime(&rtcTime);
-    printf("20%02d-%02d-%02d %02d:%02d:%02d\r\n",
-           rtcTime.year, rtcTime.month, rtcTime.date,
-           rtcTime.hours, rtcTime.minutes, rtcTime.seconds);
+    printf("启动时间:%04d-%02d-%02d %02d:%02d:%02d\r\n",
+           rtcTime.year, rtcTime.moon, rtcTime.day,
+           rtcTime.hour, rtcTime.min, rtcTime.sec);
     struct dhcp *dhcp;
     do {
         MX_LWIP_Process();
@@ -361,6 +367,7 @@ int main(void) {
         NVIC_SystemReset();
     }
     printf("SHTC3 ID:%x\n", id);
+
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_init();
     sntp_setservername(0, "ntp.aliyun.com");
@@ -407,9 +414,9 @@ int main(void) {
         cJSON_AddNumberToObject(packet, "packetSeq", ++packet_seq);
         cJSON_AddStringToObject(packet, "cmd", "ping");
         char time_str[20];
-        sprintf(time_str, "20%02d-%02d-%02d %02d:%02d:%02d",
-                rtcTime.year, rtcTime.month, rtcTime.date,
-                rtcTime.hours, rtcTime.minutes, rtcTime.seconds);
+        sprintf(time_str, "%04d-%02d-%02d %02d:%02d:%02d",
+                rtcTime.year, rtcTime.moon, rtcTime.day,
+                rtcTime.hour, rtcTime.min, rtcTime.sec);
         cJSON_AddStringToObject(packet, "time", time_str);
         char *json_str = cJSON_PrintUnformatted(packet);
         struct pbuf *udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(json_str), PBUF_RAM);

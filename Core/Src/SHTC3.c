@@ -3,8 +3,6 @@
 //
 #include "SHTC3.h"
 
-#include <stdio.h>
-
 
 typedef enum {
     READ_ID = 0xEFC8, // 命令：读取ID寄存器
@@ -18,10 +16,6 @@ typedef enum {
 } etCommands;
 
 extern I2C_HandleTypeDef hi2c3;
-
-
-SHTC3_MeasureData shtc3Read;
-SHTC3_Id shtc3_id;
 
 
 static uint8_t SHTC3_CheckCrc(const uint8_t *data, uint8_t length, uint8_t checksum) {
@@ -46,6 +40,7 @@ static HAL_StatusTypeDef SHTC3_SendCommand(uint16_t cmd) {
  * @retval HAL 状态码
  */
 HAL_StatusTypeDef SHTC3_GetId(uint16_t *id) {
+    SHTC3_Id shtc3_id;
     HAL_StatusTypeDef error = SHTC3_SendCommand(READ_ID);
     if (HAL_OK == error) {
         error = HAL_I2C_Master_Receive(&hi2c3, SHTC3_Aaddress_R, (uint8_t *) &shtc3_id, sizeof(shtc3_id), 1000);
@@ -80,6 +75,7 @@ static float SHTC3_CalcHumidity(uint16_t rawValue) {
 
 
 HAL_StatusTypeDef SHTC3_GetTempAndHumi(float *temp, float *humi) {
+    SHTC3_MeasureData shtc3Read;
     HAL_StatusTypeDef error = SHTC3_SendCommand(MEAS_RH_T_CLOCKSTR);
     if (HAL_OK == error) {
         HAL_Delay(15);
