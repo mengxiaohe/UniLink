@@ -38,6 +38,7 @@
 #include "crc16_modbus.h"
 #include "dns_resolver.h"
 #include "ds3231.h"
+#include "MCP23017.h"
 #include "SHTC3.h"
 #include "sntp.h"
 #include "prot/dhcp.h"
@@ -86,6 +87,7 @@ uint32_t packet_seq = 0;
 uint8_t rxIndex = 0;
 char rxBuffer[BUFFER_SIZE];
 uint8_t uartReceiveByte;
+uint8_t mark = 0;
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     if (GPIO_Pin == GPIO_PIN_10) {
@@ -95,6 +97,18 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
         DS3231_ReadStatusReg(&ds3231_status_reg);
         ds3231_status_reg.bits.A1F = 0;
         DS3231_WriteStatusReg(&ds3231_status_reg);
+        MCP23017_GPIO_t gpio_b;
+        mark = mark == 1 ? 0 : 1;
+        gpio_b.bits.io0 = mark;
+        gpio_b.bits.io1 = mark;
+        gpio_b.bits.io2 = mark;
+        gpio_b.bits.io3 = mark;
+        gpio_b.bits.io4 = mark;
+        gpio_b.bits.io5 = mark;
+        gpio_b.bits.io6 = mark;
+        gpio_b.bits.io7 = mark;
+        HAL_I2C_Mem_Write(&hi2c3, MCP23017_ADDRESS, MCP23017_OLATB, I2C_MEMADD_SIZE_8BIT, &gpio_b.all, 1,
+                          100);
     }
 }
 
@@ -382,6 +396,33 @@ int main(void) {
             NVIC_SystemReset();
         }
     }
+    MCP23017_GPIO_t gpio_a;
+    gpio_a.bits.io0 = 0;
+    gpio_a.bits.io1 = 0;
+    gpio_a.bits.io2 = 0;
+    gpio_a.bits.io3 = 0;
+    gpio_a.bits.io4 = 1;
+    gpio_a.bits.io5 = 1;
+    gpio_a.bits.io6 = 1;
+    gpio_a.bits.io7 = 1;
+    MCP23017_GPIO_t gpio_b;
+    gpio_b.bits.io0 = 0;
+    gpio_b.bits.io1 = 0;
+    gpio_b.bits.io2 = 0;
+    gpio_b.bits.io3 = 0;
+    gpio_b.bits.io4 = 0;
+    gpio_b.bits.io5 = 0;
+    gpio_b.bits.io6 = 0;
+    gpio_b.bits.io7 = 0;
+    HAL_I2C_Mem_Write(&hi2c3, MCP23017_ADDRESS, MCP23017_IODIRA, I2C_MEMADD_SIZE_8BIT, &gpio_a.all, 1,
+                      100);
+    HAL_I2C_Mem_Write(&hi2c3, MCP23017_ADDRESS, MCP23017_IODIRB, I2C_MEMADD_SIZE_8BIT, &gpio_b.all, 1,
+                      100);
+    HAL_I2C_Mem_Write(&hi2c3, MCP23017_ADDRESS, MCP23017_OLATA, I2C_MEMADD_SIZE_8BIT, &gpio_a.all, 1,
+                      100);
+    HAL_I2C_Mem_Write(&hi2c3, MCP23017_ADDRESS, MCP23017_OLATB, I2C_MEMADD_SIZE_8BIT, &gpio_b.all, 1,
+                      100);
+
     /* USER CODE END 2 */
 
     /* Infinite loop */
@@ -427,6 +468,8 @@ int main(void) {
         }
         cJSON_Delete(packet);
         free(json_str);
+        HAL_I2C_Mem_Read(&hi2c3, MCP23017_ADDRESS, MCP23017_GPIOA, I2C_MEMADD_SIZE_8BIT, &gpio_a.all,
+                         1, 100);
     }
     /* USER CODE END 3 */
 }

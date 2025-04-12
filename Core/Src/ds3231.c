@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 
-#include "stm32h7xx_hal.h"
+
 
 
 extern I2C_HandleTypeDef hi2c1;
@@ -85,19 +85,19 @@ HAL_StatusTypeDef DS3231_ReadSQWConfig(void) {
  * @return HAL 状态
  */
 HAL_StatusTypeDef DS3231_ReadControlReg(DS3231_ControlReg_t *ctrl_reg) {
-    return DS3231_Read(DS3231_REG_CONTROL, &ctrl_reg->all, sizeof(&ctrl_reg->all));
+    return DS3231_Read(DS3231_REG_CONTROL, &ctrl_reg->all, 1);
 }
 
 HAL_StatusTypeDef DS3231_WriteControlReg(DS3231_ControlReg_t *ctrl_reg) {
-    return DS3231_Write(DS3231_REG_CONTROL, &ctrl_reg->all, sizeof(&ctrl_reg->all));
+    return DS3231_Write(DS3231_REG_CONTROL, &ctrl_reg->all, 1);
 }
 
 HAL_StatusTypeDef DS3231_ReadStatusReg(DS3231_StatusReg_t *status_reg) {
-    return DS3231_Read(DS3231_REG_STATUS, &status_reg->all, sizeof(&status_reg->all));
+    return DS3231_Read(DS3231_REG_STATUS, &status_reg->all, 1);
 }
 
 HAL_StatusTypeDef DS3231_WriteStatusReg(DS3231_StatusReg_t *status_reg) {
-    return DS3231_Write(DS3231_REG_STATUS, &status_reg->all, sizeof(&status_reg->all));
+    return DS3231_Write(DS3231_REG_STATUS, &status_reg->all, 1);
 }
 
 /**
@@ -120,7 +120,8 @@ mode = 0x00（所有字段均参与匹配）
 
 表示匹配秒、分钟、小时和日期/星期字段，闹钟在每天的特定时间触发
  */
-HAL_StatusTypeDef DS3231_SetAlarm1(uint8_t sec, uint8_t min, uint8_t hour, uint8_t day, uint8_t mode) {
+HAL_StatusTypeDef DS3231_SetAlarm1(const uint8_t sec, const uint8_t min, const uint8_t hour, const uint8_t day,
+                                   const uint8_t mode) {
     uint8_t buf[4];
     buf[0] = DEC2BCD(sec) | ((mode & 0x01) ? 0x80 : 0x00);
     buf[1] = DEC2BCD(min) | ((mode & 0x02) ? 0x80 : 0x00);
@@ -128,16 +129,24 @@ HAL_StatusTypeDef DS3231_SetAlarm1(uint8_t sec, uint8_t min, uint8_t hour, uint8
     buf[3] = DEC2BCD(day) | ((mode & 0x08) ? 0x80 : 0x00);
     DS3231_Write(DS3231_REG_ALARM1_SEC, buf, sizeof(buf));
     DS3231_ControlReg_t ds3231_control_reg;
-    DS3231_ReadControlReg(&ds3231_control_reg);
+    HAL_StatusTypeDef status = DS3231_ReadControlReg(&ds3231_control_reg);
+    if (HAL_OK != status) {
+        return status;
+    }
     ds3231_control_reg.bits.A1IE = 0x01;
     ds3231_control_reg.bits.INTCN = 0x01;
-    DS3231_WriteControlReg(&ds3231_control_reg);
+    status = DS3231_WriteControlReg(&ds3231_control_reg);
+    if (HAL_OK != status) {
+        return status;
+    }
     // 清除Alarm1标志位
     DS3231_StatusReg_t ds3231_status_reg;
-    DS3231_ReadStatusReg(&ds3231_status_reg);
+    status = DS3231_ReadStatusReg(&ds3231_status_reg);
+    if (HAL_OK != status) {
+        return status;
+    }
     ds3231_status_reg.bits.A1F = 0;
-    DS3231_WriteStatusReg(&ds3231_status_reg);
-    return HAL_OK;
+    return DS3231_WriteStatusReg(&ds3231_status_reg);
 }
 
 #ifndef NO_EXAMPLES
