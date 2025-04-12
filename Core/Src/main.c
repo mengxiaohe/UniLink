@@ -260,7 +260,7 @@ void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p, const 
 }
 
 
-void set_system_time(const time_t seconds) {
+void set_system_time(const time_t seconds, uint32_t us) {
     // 设置时区为 GMT+8
     setenv("TZ", "UTC-8", 1);
     tzset(); // 应用新的时区设置

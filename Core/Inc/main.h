@@ -41,14 +41,14 @@ extern "C" {
 
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
-void set_system_time(time_t seconds);
+void set_system_time(time_t seconds, uint32_t us);
 
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
 #define SNTP_SERVER_DNS            1
-#define SNTP_SET_SYSTEM_TIME		set_system_time
+#define SNTP_SET_SYSTEM_TIME_US(sec, us)		set_system_time((sec), (us))
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/
