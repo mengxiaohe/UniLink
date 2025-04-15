@@ -1,7 +1,7 @@
 //
 // Created by hemeng on 2025/4/12.
 //
-#include "SHTC3.h"
+#include "shtc.h"
 
 
 typedef enum {

@@ -4,10 +4,11 @@
 
 #ifndef CRC16_MODBUS_H
 #define CRC16_MODBUS_H
-#include <stddef.h>
-#include <stdint.h>
-void init_crc16_table();
-uint16_t crc16_modbus(const uint8_t *data, size_t length);
 
-uint16_t crc16_update(uint16_t crc, const uint8_t *data, size_t length);
+#include <stdint.h>
+
+#include "stm32h7xx_hal.h"
+
+
+uint16_t CRC_Calculate(uint32_t mark, char text[], uint32_t len);
 #endif //CRC16_MODBUS_H
