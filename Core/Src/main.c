@@ -25,11 +25,13 @@
 #include "lwip.h"
 #include "memorymap.h"
 #include "rng.h"
+#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+
 #include <stdio.h>
 #include <string.h>
 
@@ -40,7 +42,6 @@
 #include "dns_resolver.h"
 #include "ds3231.h"
 #include "link.h"
-#include "mcp23017.h"
 #include "shtc.h"
 #include "sntp.h"
 #include "prot/dhcp.h"
@@ -59,7 +60,9 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 extern struct netif gnetif;
-float Temperature, Pressure, Humidity;
+
+
+uint8_t tcp_connected_flag = 0;
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -82,13 +85,20 @@ PUTCHAR_PROTOTYPE {
     return ch;
 }
 
-float Temperature, Pressure, Humidity;
+float Temperature;
+float Humidity;
+uint32_t Pressure;
 
-uint32_t packet_seq = 0;
-#define BUFFER_SIZE 64    // 定义接收缓冲区大小
-uint8_t rxIndex = 0;
-char rxBuffer[BUFFER_SIZE];
+
+#define UART_RX_BUFFER_SIZE 64
+uint8_t uartRxIndex = 0;
+char uartRxBuffer[UART_RX_BUFFER_SIZE];
 uint8_t uartReceiveByte;
+
+char sn[16];
+#define LAN_RX_BUFFER_SIZE 40960
+uint8_t lanRxIndex = 0;
+uint8_t lanRxBuffer[LAN_RX_BUFFER_SIZE];
 
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
@@ -106,155 +116,38 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart->Instance == USART1) {
         // 存储接收到的字节
-        if (rxIndex < BUFFER_SIZE - 1) {
-            rxBuffer[rxIndex++] = uartReceiveByte;
+        if (uartRxIndex < UART_RX_BUFFER_SIZE - 1) {
+            uartRxBuffer[uartRxIndex++] = uartReceiveByte;
             // 检查结束符
             if (uartReceiveByte == '\n' || uartReceiveByte == '\r') {
-                rxBuffer[rxIndex - 1] = '\0'; // 替换结束符为字符串结束符
+                uartRxBuffer[uartRxIndex - 1] = '\0'; // 替换结束符为字符串结束符
                 // 处理命令
-                if (strncmp(rxBuffer, "reboot", rxIndex) == 0) {
+                if (strncmp(uartRxBuffer, "reboot", uartRxIndex) == 0) {
                     printf("Rebooting...\n");
                     NVIC_SystemReset();
                 }
-                if (strncmp(rxBuffer, "pressure", rxIndex) == 0) {
+                if (strncmp(uartRxBuffer, "pressure", uartRxIndex) == 0) {
                     BME280_Measure();
-                    printf("Pressure:%.0f\n", Pressure / 100);
-                } else if (strncmp(rxBuffer, "time", rxIndex) == 0) {
+                    printf("Pressure:%.0f\n", Pressure / 100.0);
+                } else if (strncmp(uartRxBuffer, "time", uartRxIndex) == 0) {
                     DS3231_TimeType rtcTime;
                     DS3231_GetTime(&rtcTime);
                     printf("Time:20%02d-%02d-%02d %02d:%02d:%02d\n",
                            rtcTime.year, rtcTime.moon, rtcTime.day,
                            rtcTime.hour, rtcTime.min, rtcTime.sec);
                 } else {
-                    printf("%.*s\r\n", rxIndex, rxBuffer);
+                    printf("%.*s\r\n", uartRxIndex, uartRxBuffer);
                 }
-                rxIndex = 0; // 重置索引
+                uartRxIndex = 0; // 重置索引
             }
         } else {
             printf("Buffer overflow. Clearing buffer.\n");
-            memset(rxBuffer, 0, BUFFER_SIZE);
-            rxIndex = 0;
+            memset(uartRxBuffer, 0, UART_RX_BUFFER_SIZE);
+            uartRxIndex = 0;
         }
         // 继续接收下一个字节
         HAL_UART_Receive_IT(huart, &uartReceiveByte, 1);
     }
-}
-
-
-
-void send(struct udp_pcb *pcb, const ip_addr_t *addr, u16_t port, cJSON *data) {
-    char *json_str = cJSON_PrintUnformatted(data);
-    struct pbuf *udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(json_str), PBUF_RAM);
-    if (udp_buffer != NULL) {
-        memcpy(udp_buffer->payload, json_str, strlen(json_str));
-        udp_sendto(pcb, udp_buffer, addr, port);
-        pbuf_free(udp_buffer);
-    }
-    HAL_IWDG_Refresh(&hiwdg1);
-    free(json_str);
-    cJSON_Delete(data);
-}
-
-void packet_process(struct udp_pcb *pcb, const ip_addr_t *addr, u16_t port, cJSON *packet) {
-    char sn[16];
-    snprintf(sn, sizeof(sn), "%08X%08X%08X",
-             HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2());
-    const cJSON *sn_item = cJSON_GetObjectItemCaseSensitive(packet, "sn");
-    const cJSON *packetSeq_item = cJSON_GetObjectItemCaseSensitive(packet, "packetSeq");
-    if (!cJSON_IsNumber(packetSeq_item)) {
-        return;
-    }
-    const uint32_t packetSeq = packetSeq_item->valueint;
-    if (strcmp(sn, cJSON_GetStringValue(sn_item)) != 0) {
-        return;
-    }
-    const cJSON *cmd_item = cJSON_GetObjectItemCaseSensitive(packet, "cmd");
-    if (cJSON_IsString(cmd_item)) {
-        const char *cmd = cJSON_GetStringValue(cmd_item);
-        if (cmd != NULL) {
-            if (strcmp(cmd, "reboot") == 0) {
-                NVIC_SystemReset();
-            }
-            if (strcmp(cmd, "time") == 0) {
-                DS3231_TimeType rtcTime;
-                DS3231_GetTime(&rtcTime);
-                printf("Time:20%02d-%02d-%02d %02d:%02d:%02d\n",
-                       rtcTime.year, rtcTime.moon, rtcTime.day,
-                       rtcTime.hour, rtcTime.min, rtcTime.sec);
-            } else if (strcmp(cmd, "pong") == 0) {
-                HAL_IWDG_Refresh(&hiwdg1);
-            } else if (strcmp(cmd, "get_config") == 0) {
-                uint32_t mark;
-                EEPROM_Read(0, (uint8_t *) &mark, sizeof(mark));
-                uint16_t len;
-                EEPROM_Read(sizeof(mark), (uint8_t *) &len, sizeof(len));
-                cJSON *data = cJSON_CreateObject();
-                cJSON_AddNumberToObject(data, "packetSeq", ++packet_seq);
-                cJSON_AddNumberToObject(data, "ackPacketSeq", packetSeq);
-                cJSON_AddStringToObject(data, "cmd", "get_config_ack");
-                cJSON_AddStringToObject(data, "sn", sn);
-                if (0xFEFCDDDC != mark || len > 4096) {
-                    cJSON_AddStringToObject(data, "data", "ERROR");
-                } else {
-                    u_int8_t text[len];
-                    EEPROM_Read(sizeof(mark) + sizeof(len), (uint8_t *) &text, len);
-                    uint16_t read_crc;
-                    EEPROM_Read(sizeof(mark) + sizeof(len) + len, (uint8_t *) &read_crc, sizeof(read_crc));
-                    uint16_t calculated_crc = CRC_Calculate(mark, text, len);
-                    if (read_crc != calculated_crc) {
-                        cJSON_AddStringToObject(data, "data", "CRC_ERROR");
-                    } else {
-                        cJSON_AddStringToObject(data, "data", text);
-                    }
-                }
-                send(pcb, addr, port, data);
-            } else if (strcmp(cmd, "set_config") == 0) {
-                HAL_IWDG_Refresh(&hiwdg1);
-                const cJSON *data_item = cJSON_GetObjectItemCaseSensitive(packet, "data");
-                if (cJSON_IsString(data_item)) {
-                    const char *text_str = cJSON_GetStringValue(data_item);
-                    uint32_t mark = 0xFEFCDDDC;
-                    uint16_t len = strlen(text_str) + 1;
-                    // 分配内存，包含终止符
-                    u_int8_t text[len];
-                    memcpy(text, text_str, len); // 复制数据
-                    uint16_t calculated_crc = CRC_Calculate(mark, text, len);
-                    EEPROM_Write(0, (uint8_t *) &mark, sizeof(mark));
-                    EEPROM_Write(sizeof(mark), (uint8_t *) &len, sizeof(len));
-                    EEPROM_Write(sizeof(mark) + sizeof(len), (uint8_t *) &text, len);
-                    EEPROM_Write(sizeof(mark) + sizeof(len) + len, (uint8_t *) &calculated_crc, sizeof(calculated_crc));
-                }
-                cJSON *data = cJSON_CreateObject();
-                cJSON_AddNumberToObject(data, "packetSeq", ++packet_seq);
-                cJSON_AddNumberToObject(data, "ackPacketSeq", packetSeq);
-                cJSON_AddStringToObject(data, "cmd", "set_config_ack");
-                cJSON_AddStringToObject(data, "data", "ok");
-                cJSON_AddStringToObject(data, "sn", sn);
-                HAL_IWDG_Refresh(&hiwdg1);
-                send(pcb, addr, port, data);
-            }
-        }
-    }
-}
-
-void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
-    if (p == NULL) return;
-    // 优化1: 使用固定缓冲区防止溢出
-    char buffer[1473];
-    // 优化2: 安全拷贝数据并添加终止符
-    const u16_t len = pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
-    buffer[len > sizeof(buffer) - 1 ? sizeof(buffer) - 1 : len] = '\0';
-    cJSON *packet = cJSON_Parse(buffer);
-    pbuf_free(p);
-    if (packet == NULL) {
-        const char *error_ptr = cJSON_GetErrorPtr();
-        if (error_ptr != NULL) {
-            printf("JSON 解析错误 UDP[%s:%d] %.*s\n", ipaddr_ntoa(addr), port, (int) sizeof(buffer), buffer);
-        }
-        return;
-    }
-    packet_process(pcb, addr, port, packet);
-    cJSON_Delete(packet);
 }
 
 
@@ -276,8 +169,42 @@ void set_system_time(const time_t seconds, uint32_t us) {
         printf("ntp同步时间成功\n");
     } else {
         printf("ntp同步时间失败\n");
+        NVIC_SystemReset();
     }
 }
+
+
+/* 接收到服务器数据后的回调 */
+err_t tcp_client_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
+    if (err != ERR_OK || p == NULL) {
+        tcp_connected_flag = 0;
+        tcp_close(tpcb);
+        NVIC_SystemReset();
+    }
+    /* 访问接收到的数据 */
+    const uint8_t *data = p->payload;
+    const uint16_t len = p->len;
+    memmove(lanRxBuffer + lanRxIndex, data, len);
+    lanRxIndex += len;
+    if (LAN_RX_BUFFER_SIZE < lanRxIndex) {
+        printf("超过缓冲区\n");
+        NVIC_SystemReset();
+    }
+    /* 通知 lwIP 已经接收 len 字节 */
+    tcp_recved(tpcb, len);
+    /* 释放 pbuf */
+    pbuf_free(p);
+    return ERR_OK;
+}
+
+uint8_t ping_flag = 0;
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+    if (htim->Instance == TIM2) {
+        ping_flag = 1;
+    }
+}
+
 
 /* USER CODE END PFP */
 
@@ -286,6 +213,150 @@ void set_system_time(const time_t seconds, uint32_t us) {
 
 
 /* USER CODE END 0 */
+
+void ping() {
+    if (ping_flag == 1) {
+        ping_flag = 0;
+        cJSON *packet = cJSON_CreateObject();
+        cJSON_AddStringToObject(packet, "sn", sn);
+        cJSON_AddStringToObject(packet, "cmd", "ping");
+        char time_str[20];
+        DS3231_TimeType rtcTime;
+        DS3231_GetTime(&rtcTime);
+        sprintf(time_str, "%04d-%02d-%02d %02d:%02d:%02d",
+                rtcTime.year, rtcTime.moon, rtcTime.day,
+                rtcTime.hour, rtcTime.min, rtcTime.sec);
+        cJSON_AddStringToObject(packet, "time", time_str);
+        uint16_t temp, humi;
+        if (HAL_OK != SHTC3_Wakeup() || HAL_OK != SHTC3_GetTempAndHumi(&temp, &humi)) {
+            temp = 0, humi = 0;
+        }
+        DS3231_GetTime(&rtcTime);
+        BME280_Measure();
+        cJSON_AddNumberToObject(packet, "temperature", temp);
+        cJSON_AddNumberToObject(packet, "humidity", humi);
+        cJSON_AddNumberToObject(packet, "pressure", Pressure);
+        char *packet_str = cJSON_PrintUnformatted(packet);
+        send(packet_str);
+        cJSON_Delete(packet);
+        free(packet_str);
+    }
+}
+
+void ack(const char *cmd) {
+    cJSON *packet = cJSON_CreateObject();
+    cJSON_AddStringToObject(packet, "sn", sn);
+    cJSON_AddStringToObject(packet, "cmd", cmd);
+    char time_str[20];
+    DS3231_TimeType rtcTime;
+    DS3231_GetTime(&rtcTime);
+    sprintf(time_str, "%04d-%02d-%02d %02d:%02d:%02d",
+            rtcTime.year, rtcTime.moon, rtcTime.day,
+            rtcTime.hour, rtcTime.min, rtcTime.sec);
+    cJSON_AddStringToObject(packet, "time", time_str);
+    char *packet_str = cJSON_PrintUnformatted(packet);
+    send(packet_str);
+    cJSON_Delete(packet);
+    free(packet_str);
+}
+
+void read_config() {
+    cJSON *packet = cJSON_CreateObject();
+    cJSON_AddStringToObject(packet, "sn", sn);
+    cJSON_AddStringToObject(packet, "cmd", "read_config_ack");
+    char time_str[20];
+    DS3231_TimeType rtcTime;
+    DS3231_GetTime(&rtcTime);
+    sprintf(time_str, "%04d-%02d-%02d %02d:%02d:%02d",
+            rtcTime.year, rtcTime.moon, rtcTime.day,
+            rtcTime.hour, rtcTime.min, rtcTime.sec);
+    cJSON_AddStringToObject(packet, "time", time_str);
+    uint32_t mark;
+    EEPROM_Read(0, (uint8_t *) &mark, sizeof(mark));
+    uint16_t len;
+    EEPROM_Read(sizeof(mark), (uint8_t *) &len, sizeof(len));
+    if (0xFEFCDDDC != mark || len > 4096) {
+        cJSON_AddStringToObject(packet, "data", "EEPROM ERROR");
+    } else {
+        u_int8_t text[len];
+        EEPROM_Read(sizeof(mark) + sizeof(len), (uint8_t *) &text, len);
+        uint16_t read_crc;
+        EEPROM_Read(sizeof(mark) + sizeof(len) + len, (uint8_t *) &read_crc, sizeof(read_crc));
+        uint16_t calculated_crc = CRC_Calculate(mark, text, len);
+        if (read_crc != calculated_crc) {
+            cJSON_AddStringToObject(packet, "data", "EEPROM CRC ERROR");
+        } else {
+            cJSON_AddStringToObject(packet, "data", text);
+        }
+    }
+    char *packet_str = cJSON_PrintUnformatted(packet);
+    send(packet_str);
+    cJSON_Delete(packet);
+    free(packet_str);
+}
+
+void print_hex(const uint8_t *data, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        printf("%02X ", data[i]); // 大写字母，空格分隔
+    }
+    printf("\n");
+}
+
+void process_data() {
+    if (lanRxIndex >= sizeof(struct nshead_t)) {
+        struct nshead_t nshead = bytes_to_struct(lanRxBuffer);
+        if (NSHEAD_MAGICNUM != nshead.magic_num) {
+            printf("magic错误\n");
+            NVIC_SystemReset();
+        }
+        const uint16_t body_len = nshead.body_len;
+        const uint32_t msg_len = sizeof(struct nshead_t) + body_len;
+        if (msg_len > lanRxIndex) {
+            return;
+        }
+        lanRxIndex -= msg_len;
+        const uint8_t *src = lanRxBuffer + sizeof(struct nshead_t);
+        uint8_t temp[body_len];
+        memcpy(temp, src, body_len);
+        const uint32_t actual_crc = HAL_CRC_Calculate(&hcrc, (uint32_t *) temp, body_len);
+        if (actual_crc != nshead.checksum) {
+            printf("crc error\n");
+            NVIC_SystemReset();
+        }
+        cJSON *packet = cJSON_Parse(temp);
+        if (packet == NULL) {
+            NVIC_SystemReset();
+        }
+        memmove(&lanRxBuffer[0], &lanRxBuffer[msg_len], lanRxIndex * sizeof(lanRxBuffer[0]));
+        memset(&lanRxBuffer[lanRxIndex], 0, (LAN_RX_BUFFER_SIZE - lanRxIndex) * sizeof(lanRxBuffer[0]));
+        const cJSON *cmd_item = cJSON_GetObjectItemCaseSensitive(packet, "cmd");
+        const cJSON *sn_item = cJSON_GetObjectItemCaseSensitive(packet, "sn");
+        if (!cJSON_IsString(cmd_item) || !cJSON_IsString(sn_item)) {
+            NVIC_SystemReset();
+        }
+        if (strcmp(cJSON_GetStringValue(sn_item), sn) != 0) {
+            NVIC_SystemReset();
+        }
+        const char *cmd = cJSON_GetStringValue(cmd_item);
+        if (strcmp(cmd, "pong") == 0) {
+        } else if (strcmp(cmd, "led0_on") == 0) {
+            HAL_GPIO_WritePin(GPIOI,GPIO_PIN_8, GPIO_PIN_RESET);
+            ack("led0_on_ack");
+        } else if (strcmp(cmd, "led0_off") == 0) {
+            HAL_GPIO_WritePin(GPIOI,GPIO_PIN_8, GPIO_PIN_SET);
+            ack("led0_off_ack");
+        } else if (strcmp(cmd, "test") == 0) {
+            ack("led0_off_ack");
+        } else if (strcmp(cmd, "read_config") == 0) {
+            read_config();
+        } else {
+            char *json_str = cJSON_PrintUnformatted(packet);
+            printf("%s\n", json_str);
+            free(json_str);
+        }
+        cJSON_Delete(packet);
+    }
+}
 
 /**
   * @brief  The application entry point.
@@ -325,15 +396,14 @@ int main(void) {
     MX_CRC_Init();
     MX_I2C3_Init();
     MX_RNG_Init();
+    MX_TIM2_Init();
     /* USER CODE BEGIN 2 */
+    snprintf(sn, 16, "%08X%08X%08X",
+             HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2());
     HAL_UART_Receive_IT(&huart1, &uartReceiveByte, 1);
     if (HAL_OK != EEPROM_Init(&hi2c1)) {
         printf("初始化eeprom失败\n");
         NVIC_SystemReset();
-    }
-    DS3231_ControlReg_t ds3231_control_reg;
-    if (HAL_OK == DS3231_ReadControlReg(&ds3231_control_reg)) {
-        DS3231_SetAlarm1(0, 0, 0, 1, 0x0E);
     }
     DS3231_TimeType rtcTime;
     DS3231_GetTime(&rtcTime);
@@ -353,36 +423,14 @@ int main(void) {
     const ip_addr_t api_ip = get_api_ip();
     printf("API Server IP: %s\n", ipaddr_ntoa(&api_ip));
     HAL_IWDG_Refresh(&hiwdg1);
-    if (HAL_OK != SHTC3_SoftReset()) {
-        printf("复位SHTC3失败\n");
-        NVIC_SystemReset();
-    }
-    if (HAL_OK != SHTC3_Wakeup()) {
-        printf("唤醒SHTC3失败\n");
-        NVIC_SystemReset();
-    }
-    uint16_t id;
-    if (HAL_OK != SHTC3_GetId(&id)) {
-        printf("读取SHTC3 ID失败\n");
-        NVIC_SystemReset();
-    }
-    printf("SHTC3 ID:%x\n", id);
-
+    SHTC3_Init();
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_init();
     sntp_setservername(0, "ntp.aliyun.com");
     BME280_Config(OSRS_2, OSRS_16, OSRS_1, MODE_NORMAL, T_SB_0p5, IIR_16);
-    struct udp_pcb *udp_pcb = udp_new_ip6();
-    if (udp_pcb) {
-        if (udp_bind(udp_pcb, IP6_ADDR_ANY, 8668) == ERR_OK) {
-            udp_recv(udp_pcb, udp_receive_callback, NULL);
-        } else {
-            printf("创建udp失败\n");
-            udp_remove(udp_pcb);
-            NVIC_SystemReset();
-        }
-    }
     tcp_client_init(api_ip);
+    HAL_TIM_Base_Start_IT(&htim2);
+
     /* USER CODE END 2 */
 
     /* Infinite loop */
@@ -392,42 +440,11 @@ int main(void) {
 
         /* USER CODE BEGIN 3 */
         MX_LWIP_Process();
-        for (int i = 0; i < 1; ++i) {
-            MX_LWIP_Process();
+        HAL_IWDG_Refresh(&hiwdg1);
+        if (tcp_connected_flag) {
+            ping();
         }
-        float temp, humi;
-        if (HAL_OK != SHTC3_Wakeup() || HAL_OK != SHTC3_GetTempAndHumi(&temp, &humi)) {
-            temp = 0, humi = 0;
-        }
-        DS3231_GetTime(&rtcTime);
-        BME280_Measure();
-        cJSON *packet = cJSON_CreateObject();
-        char sn_str[16];
-        snprintf(sn_str, sizeof(sn_str), "%08X%08X%08X",
-                 HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2());
-        cJSON_AddStringToObject(packet, "sn", sn_str);
-        const double temperatureRounded = round((double) temp * 10) / 10.0;
-        const double humidityRounded = round((double) humi * 10) / 10.0;
-        const int pressureRounded = (int) roundf(Pressure / 100);
-        cJSON_AddNumberToObject(packet, "temperature", temperatureRounded);
-        cJSON_AddNumberToObject(packet, "humidity", humidityRounded);
-        cJSON_AddNumberToObject(packet, "pressure", pressureRounded);
-        cJSON_AddNumberToObject(packet, "packetSeq", ++packet_seq);
-        cJSON_AddStringToObject(packet, "cmd", "ping");
-        char time_str[20];
-        sprintf(time_str, "%04d-%02d-%02d %02d:%02d:%02d",
-                rtcTime.year, rtcTime.moon, rtcTime.day,
-                rtcTime.hour, rtcTime.min, rtcTime.sec);
-        cJSON_AddStringToObject(packet, "time", time_str);
-        char *json_str = cJSON_PrintUnformatted(packet);
-        struct pbuf *udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(json_str), PBUF_RAM);
-        if (udp_buffer != NULL) {
-            memcpy(udp_buffer->payload, json_str, strlen(json_str));
-            udp_sendto(udp_pcb, udp_buffer, &api_ip, 8667);
-            pbuf_free(udp_buffer);
-        }
-        cJSON_Delete(packet);
-        free(json_str);
+        process_data();
     }
     /* USER CODE END 3 */
 }
@@ -544,11 +561,10 @@ void Error_Handler(void) {
   * @param  line: assert_param error line source number
   * @retval None
   */
-void assert_failed(uint8_t *file, uint32_t line)
-{
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
+void assert_failed(uint8_t *file, uint32_t line) {
+    /* USER CODE BEGIN 6 */
+    /* User can add his own implementation to report the file name and line number,
+       ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+    /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

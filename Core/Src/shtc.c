@@ -3,6 +3,8 @@
 //
 #include "shtc.h"
 
+#include <stdio.h>
+
 
 typedef enum {
     READ_ID = 0xEFC8, // 命令：读取ID寄存器
@@ -74,7 +76,7 @@ static float SHTC3_CalcHumidity(uint16_t rawValue) {
 }
 
 
-HAL_StatusTypeDef SHTC3_GetTempAndHumi(float *temp, float *humi) {
+HAL_StatusTypeDef SHTC3_GetTempAndHumi(uint16_t *temp, uint16_t *humi) {
     SHTC3_MeasureData shtc3Read;
     HAL_StatusTypeDef error = SHTC3_SendCommand(MEAS_RH_T_CLOCKSTR);
     if (HAL_OK == error) {
@@ -88,8 +90,8 @@ HAL_StatusTypeDef SHTC3_GetTempAndHumi(float *temp, float *humi) {
                 bytes[0] = shtc3Read.HumidityMSB;
                 bytes[1] = shtc3Read.HumidityLSB;
                 if (SHTC3_CheckCrc(bytes, 2, shtc3Read.HumidityCRC)) {
-                    *humi = SHTC3_CalcHumidity(shtc3Read.HumidityMSB << 8 | shtc3Read.HumidityLSB);
-                    *temp = SHTC3_CalcTemperature(shtc3Read.temperatureMSB << 8 | shtc3Read.temperatureLSB);
+                    *humi = SHTC3_CalcHumidity(shtc3Read.HumidityMSB << 8 | shtc3Read.HumidityLSB)*100;
+                    *temp = SHTC3_CalcTemperature(shtc3Read.temperatureMSB << 8 | shtc3Read.temperatureLSB)*100;
                     return error;
                 }
             }
@@ -122,4 +124,20 @@ HAL_StatusTypeDef SHTC3_SoftReset() {
         HAL_Delay(10);
     }
     return error;
+}
+
+void SHTC3_Init() {
+    if (HAL_OK != SHTC3_SoftReset()) {
+        printf("复位SHTC3失败\n");
+        NVIC_SystemReset();
+    }
+    if (HAL_OK != SHTC3_Wakeup()) {
+        printf("唤醒SHTC3失败\n");
+        NVIC_SystemReset();
+    }
+    uint16_t id;
+    if (HAL_OK != SHTC3_GetId(&id)) {
+        printf("读取SHTC3 ID失败\n");
+        NVIC_SystemReset();
+    }
 }

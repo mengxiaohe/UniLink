@@ -32,6 +32,8 @@ extern "C" {
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <sys/time.h>
+
+
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -49,6 +51,8 @@ void set_system_time(time_t seconds, uint32_t us);
 /* USER CODE BEGIN EM */
 #define SNTP_SERVER_DNS            1
 #define SNTP_SET_SYSTEM_TIME_US(sec, us)		set_system_time((sec), (us))
+extern uint8_t tcp_connected_flag;
+
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/

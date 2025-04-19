@@ -26,11 +26,11 @@ typedef struct {
     uint8_t idCRC;
 } SHTC3_Id;
 
-
+void SHTC3_Init();
 
 HAL_StatusTypeDef SHTC3_GetId(uint16_t *id);
 
-HAL_StatusTypeDef SHTC3_GetTempAndHumi(float *temp, float *humi);
+HAL_StatusTypeDef SHTC3_GetTempAndHumi(uint16_t *temp, uint16_t *humi);
 
 HAL_StatusTypeDef SHTC3_Wakeup(void);
 HAL_StatusTypeDef SHTC3_Sleep(void);

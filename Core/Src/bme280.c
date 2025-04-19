@@ -25,7 +25,9 @@ extern I2C_HandleTypeDef hi2c1;
 #define BME280_ADDRESS 0xEE
 
 // 全局变量：存储温度（单位：℃）、压力（单位：Pa）和湿度（单位：%RH）的测量结果
-extern float Temperature, Pressure, Humidity;
+extern float Temperature;
+extern float Humidity;
+extern uint32_t Pressure;
 
 uint8_t chipID;
 uint8_t TrimParam[36]; // 用于存放校准数据（本例中直接读取到临时数组中）
