@@ -179,10 +179,16 @@ SECTIONS
     . = ABSOLUTE(0x30040200);
     *(.Rx_PoolSection)
   } >RAM_D2
-      .sdram (NOLOAD) :
-      {
-          . = ABSOLUTE(0xc0000000);
-          *(.packet_buffer)
+     .sdram (NOLOAD) :
+         {
+             . = ABSOLUTE(0xc0000000);
+             *(.packet_buffer)
+             . = ABSOLUTE(0xc0400000);
+             *(.packet_tx_buffer)
+             . = ABSOLUTE(0xc0800000);
+             *(.packet_rx_buffer)
+             . = ABSOLUTE(0xc0C00000);
+             *(.unallocated_memory)
   } > SDRAM
   /* Remove information from the standard libraries */
   /DISCARD/ :

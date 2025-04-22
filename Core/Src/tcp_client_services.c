@@ -5,6 +5,7 @@
 #include "tcp_client_services.h"
 
 #include "iwdg.h"
+#include "memory_sections.h"
 
 
 extern char sn[16];
@@ -13,7 +14,6 @@ uint32_t lanRxIndex;
 
 extern CRC_HandleTypeDef hcrc;
 
-uint8_t packet_buffer[LAN_RX_BUFFER_SIZE] __attribute__((section(".packet_buffer"))) = {0};
 
 /* 接收到服务器数据后的回调 */
 err_t tcp_client_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
@@ -24,7 +24,7 @@ err_t tcp_client_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
     }
     struct pbuf *q = p;
     while (q != NULL) {
-        if (lanRxIndex + q->len > LAN_RX_BUFFER_SIZE) {
+        if (lanRxIndex + q->len > LAN_PACKET_RX_BUFFER_SIZE) {
             printf("超过缓冲区容量\n");
             pbuf_free(p);
             NVIC_SystemReset();
@@ -108,6 +108,6 @@ void process_data() {
             send(nshead.message_id, 16, TERMINAL_UNIVERSAL_ACK);
         }
         memmove(&packet_buffer[0], &packet_buffer[msg_len], lanRxIndex * sizeof(packet_buffer[0]));
-        memset(&packet_buffer[lanRxIndex], 0, (LAN_RX_BUFFER_SIZE - lanRxIndex) * sizeof(packet_buffer[0]));
+        memset(&packet_buffer[lanRxIndex], 0, (LAN_PACKET_RX_BUFFER_SIZE - lanRxIndex) * sizeof(packet_buffer[0]));
     }
 }
