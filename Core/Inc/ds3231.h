@@ -28,12 +28,13 @@
 #define DS3231_REG_STATUS         0x0F  // 状态寄存器
 
 #include <stdint.h>
+#include <sys/time.h>
 
 #include "stm32h7xx_hal.h"
 
 // DS3231时间数据结构
 typedef struct {
-    uint8_t sec, min, hour, week, day, moon; //秒 0~59 //分 0~59 //时 0~23 // 星期 1~7 // 日 1~31 // 月 1~12（最高位为世纪位）
+    uint8_t sec, min, hour, week, day, month; //秒 0~59 //分 0~59 //时 0~23 // 星期 1~7 // 日 1~31 // 月 1~12（最高位为世纪位）
     uint16_t year; // 年（00~99）
 } DS3231_TimeType;
 
@@ -78,6 +79,7 @@ HAL_StatusTypeDef DS3231_SetTime(const DS3231_TimeType *time);
 
 HAL_StatusTypeDef DS3231_GetTime(DS3231_TimeType *time);
 
+time_t DS3231_GetTimestamp();
 
 HAL_StatusTypeDef DS3231_ReadSQWConfig(void);
 

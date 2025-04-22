@@ -10,10 +10,21 @@
 #include "ip_addr.h"
 
 #include "tcp.h"
-
+/**
+ * 终端 0x0000 - 0x7FFE
+ * 平台 0x7FFF - 0xFFFF
+ */
+enum MessageType : uint16_t {
+    PING = 0x0000,
+    UPLOAD_BIG_DATA = 0x0001,
+    PONG = 0x7FFF,
+    TERMINAL_UNIVERSAL_ACK = 0x7FFE,
+    DOWNLOAD_BIG_DATA = 0x8000,
+};
 
 static const uint32_t NSHEAD_MAGICNUM = 0xfb7a9394;
 #pragma pack(1)
+
 struct nshead_t {
     /**
      * 魔数
@@ -27,14 +38,37 @@ struct nshead_t {
      * 保留字段
      */
     uint32_t reserved;
-    /**
-     * 	Payload 长度
-     */
-    uint32_t body_len;
+
     /**
      * 检验位
      */
     uint16_t checksum;
+
+    /**
+  * 	Payload 长度
+  */
+    uint32_t body_len;
+
+    /**
+     * sn
+     */
+    uint8_t sn[16];
+
+
+    /**
+     * cmd
+     */
+    enum MessageType cmd;
+
+    /**
+     * 时间戳
+     */
+    uint32_t timestamp;
+
+    /**
+     * 消息 ID
+     */
+    uint8_t message_id[16];
 };
 
 
@@ -43,7 +77,9 @@ struct nshead_t {
 .version = 0, \
 .reserved = 0, \
 .body_len = 0, \
-.checksum = 0 \
+.checksum = 0, \
+.sn = {0}  ,\
+.timestamp = 0  \
 }
 
 
@@ -59,6 +95,7 @@ err_t tcp_client_connected(void *arg, struct tcp_pcb *tpcb, err_t err);
 /* 接收数据回调 */
 err_t tcp_client_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
 
-struct nshead_t bytes_to_struct(const uint8_t *buffer);
-void send(char *buf);
+struct nshead_t bytes_to_head(const uint8_t *buffer);
+
+void send(uint8_t *buf, uint32_t body_len, enum MessageType cmd);
 #endif //LINK_H

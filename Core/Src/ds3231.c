@@ -5,8 +5,8 @@
 
 
 #include <stdio.h>
-
-
+#include <string.h>
+#include <sys/time.h>
 
 
 extern I2C_HandleTypeDef hi2c1;
@@ -39,7 +39,7 @@ HAL_StatusTypeDef DS3231_SetTime(const DS3231_TimeType *time) {
         DEC2BCD(time->hour),
         DEC2BCD(time->week),
         DEC2BCD(time->day),
-        DEC2BCD(time->moon),
+        DEC2BCD(time->month),
         DEC2BCD(time->year % 100)
     };
     return DS3231_Write(DS3231_REG_SEC, buf, sizeof(buf));
@@ -55,9 +55,26 @@ HAL_StatusTypeDef DS3231_GetTime(DS3231_TimeType *time) {
     time->hour = BCD2DEC(buf[2] & 0x3F);
     time->week = BCD2DEC(buf[3] & 0x07);
     time->day = BCD2DEC(buf[4] & 0x3F);
-    time->moon = BCD2DEC(buf[5] & 0x1F);
+    time->month = BCD2DEC(buf[5] & 0x1F);
     time->year = 2000 + BCD2DEC(buf[6]);
     return HAL_OK;
+}
+
+
+time_t DS3231_GetTimestamp(void) {
+    DS3231_TimeType rtcTime;
+    if (DS3231_GetTime(&rtcTime) != HAL_OK) {
+        return 0;
+    }
+    struct tm tinfo = {0};
+    tinfo.tm_sec = rtcTime.sec;
+    tinfo.tm_min = rtcTime.min;
+    tinfo.tm_hour = rtcTime.hour - 8;
+    tinfo.tm_mday = rtcTime.day;
+    tinfo.tm_mon = rtcTime.month - 1;
+    tinfo.tm_year = rtcTime.year - 1900;
+    tinfo.tm_isdst = -1; // 由库自动判断夏令时
+    return mktime(&tinfo);
 }
 
 HAL_StatusTypeDef DS3231_ReadSQWConfig(void) {
@@ -158,12 +175,12 @@ void ds3231_example() {
     rtcTime.hour = 21;
     rtcTime.week = 6; // 星期6
     rtcTime.day = 29;
-    rtcTime.moon = 3;
+    rtcTime.month = 3;
     rtcTime.year = 25;
     DS3231_SetTime(&rtcTime);
     DS3231_GetTime(&rtcTime);
     printf("20%02d/%02d/%02d %02d:%02d:%02d\r\n",
-           rtcTime.year, rtcTime.moon, rtcTime.day,
+           rtcTime.year, rtcTime.month, rtcTime.day,
            rtcTime.hour, rtcTime.min, rtcTime.sec);
 }
 #endif

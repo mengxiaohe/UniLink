@@ -27,7 +27,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
                     DS3231_TimeType rtcTime;
                     DS3231_GetTime(&rtcTime);
                     printf("Time:20%02d-%02d-%02d %02d:%02d:%02d\n",
-                           rtcTime.year, rtcTime.moon, rtcTime.day,
+                           rtcTime.year, rtcTime.month, rtcTime.day,
                            rtcTime.hour, rtcTime.min, rtcTime.sec);
                 } else {
                     printf("%.*s\r\n", uartRxIndex, uartRxBuffer);

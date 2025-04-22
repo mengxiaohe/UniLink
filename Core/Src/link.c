@@ -6,6 +6,7 @@
 
 #include "cJSON.h"
 #include "crc.h"
+#include "ds3231.h"
 
 
 /* TCP PCB 句柄 */
@@ -37,39 +38,75 @@ void tcp_client_init(ip_addr_t server_ip) {
                 tcp_client_connected);
 }
 
+void Fill_MessageID_With_HWRNG(uint8_t *message_id) {
+    for (int i = 0; i < 16; i += 4) {
+        uint32_t random32;
+        if (HAL_RNG_GenerateRandomNumber(&hrng, &random32) != HAL_OK) {
+            Error_Handler();
+        }
+        // 将32位随机数拆分为4个字节
+        message_id[i] = (random32 >> 24) & 0xFF;
+        message_id[i + 1] = (random32 >> 16) & 0xFF;
+        message_id[i + 2] = (random32 >> 8) & 0xFF;
+        message_id[i + 3] = random32 & 0xFF;
+    }
+}
+
 //htons   htonl
-uint8_t *struct_to_bytes(const struct nshead_t *head) {
-    static uint8_t buffer[16];
+uint8_t *head_to_bytes(const struct nshead_t *head) {
+    static uint8_t buffer[sizeof(struct nshead_t)];
     const uint32_t magic_num_net = htonl(head->magic_num);
     memcpy(buffer, &magic_num_net, 4);
     const uint16_t version_net = htons(head->version);
     memcpy(buffer + 4, &version_net, 2);
     const uint32_t reserved_net = htonl(head->reserved);
     memcpy(buffer + 6, &reserved_net, 4);
-    const uint32_t body_len_net = htonl(head->body_len);
-    memcpy(buffer + 10, &body_len_net, 4);
     const uint16_t checksum_net = htons(head->checksum);
-    memcpy(buffer + 14, &checksum_net, 2);
+    memcpy(buffer + 10, &checksum_net, 2);
+    const uint32_t body_len_net = htonl(head->body_len);
+    memcpy(buffer + 12, &body_len_net, 4);
+    for (int i = 0; i < sizeof(head->sn); ++i) {
+        buffer[16 + i] = head->sn[i];
+    }
+    buffer[33] = head->cmd & 0xFF;
+    buffer[32] = head->cmd >> 8 & 0xFF;
+    const uint32_t timestamp_net = htonl(head->timestamp);
+    memcpy(buffer + 34, &timestamp_net, 4);
+    for (int i = 0; i < sizeof(head->message_id); ++i) {
+        buffer[38 + i] = head->message_id[i];
+    }
     return buffer;
 }
 
-struct nshead_t bytes_to_struct(const uint8_t *buffer) {
+struct nshead_t bytes_to_head(const uint8_t *buffer) {
     struct nshead_t head;
     uint32_t magic_num_net;
     memcpy(&magic_num_net, buffer, 4);
     head.magic_num = ntohl(magic_num_net);
-    uint16_t version_net;
-    memcpy(&version_net, buffer + 4, 2);
-    head.version = ntohs(version_net);
-    uint32_t reserved_net;
-    memcpy(&reserved_net, buffer + 6, 4);
-    head.reserved = ntohl(reserved_net);
-    uint32_t body_len_net;
-    memcpy(&body_len_net, buffer + 10, 4);
-    head.body_len = ntohl(body_len_net);
-    uint16_t checksum_net;
-    memcpy(&checksum_net, buffer + 14, 2);
-    head.checksum = ntohs(checksum_net);
+    head.version = (uint16_t) buffer[4] << 8
+                   | buffer[5];
+    head.reserved = (uint32_t) buffer[6] << 24
+                    | buffer[7] << 16
+                    | buffer[8] << 8
+                    | buffer[9];
+    head.checksum = (uint16_t) buffer[10] << 8
+                    | buffer[11];
+    head.body_len = (uint32_t) buffer[12] << 24
+                    | buffer[13] << 16
+                    | buffer[14] << 8
+                    | buffer[15];
+    for (int i = 0; i < 16; ++i) {
+        head.sn[i] = buffer[16 + i];
+    }
+    head.cmd = (enum MessageType) (uint16_t) buffer[32] << 8
+               | buffer[33];
+    head.timestamp = (uint32_t) buffer[34] << 24
+                     | buffer[35] << 16
+                     | buffer[36] << 8
+                     | buffer[37];
+    for (int i = 0; i < 16; ++i) {
+        head.message_id[i] = buffer[38 + i];
+    }
     return head;
 }
 
@@ -85,14 +122,42 @@ err_t tcp_client_connected(void *arg, struct tcp_pcb *tpcb, err_t err) {
 }
 
 
-void send(char *buf) {
-    const size_t body_len = strlen(buf);
+void send(uint8_t *buf, uint32_t body_len, enum MessageType cmd) {
     struct nshead_t head = NSHEAD_DEFAULT;
-    head.checksum = HAL_CRC_Calculate(&hcrc, (uint32_t *) buf, body_len);
+    uint32_t uid[3];
+    uid[0] = HAL_GetUIDw0();
+    uid[1] = HAL_GetUIDw1();
+    uid[2] = HAL_GetUIDw2();
+    uint8_t sn[16];
+    sn[0] = (uid[0] >> 24) & 0xFF;
+    sn[1] = (uid[0] >> 16) & 0xFF;
+    sn[2] = (uid[0] >> 8) & 0xFF;
+    sn[3] = uid[0] & 0xFF;
+    sn[4] = (uid[1] >> 24) & 0xFF;
+    sn[5] = (uid[1] >> 16) & 0xFF;
+    sn[6] = (uid[1] >> 8) & 0xFF;
+    sn[7] = uid[1] & 0xFF;
+    sn[8] = (uid[2] >> 24) & 0xFF;
+    sn[9] = (uid[2] >> 16) & 0xFF;
+    sn[10] = (uid[2] >> 8) & 0xFF;
+    sn[11] = uid[2] & 0xFF;
+    // 将剩余的字节填充为零
+    memset(&sn[12], 0, 4);
+    memcpy(head.sn, sn, sizeof(head.sn));
+    if (body_len > 0) {
+        head.checksum = HAL_CRC_Calculate(&hcrc, (uint32_t *) buf, body_len);
+    } else {
+        head.checksum = 0x0000;
+    }
     head.body_len = body_len;
-    const uint8_t *head_buffer = struct_to_bytes(&head);
+    head.cmd = cmd;
+    head.timestamp = DS3231_GetTimestamp();
+    Fill_MessageID_With_HWRNG(head.message_id);
+    const uint8_t *head_buffer = head_to_bytes(&head);
     tcp_write(tcp_client_pcb, head_buffer, sizeof(struct nshead_t), TCP_WRITE_FLAG_COPY);
-    tcp_write(tcp_client_pcb, buf, strlen(buf), TCP_WRITE_FLAG_COPY);
+    if (body_len > 0) {
+        tcp_write(tcp_client_pcb, buf, body_len, TCP_WRITE_FLAG_COPY);
+    }
     tcp_output(tcp_client_pcb);
 }
 

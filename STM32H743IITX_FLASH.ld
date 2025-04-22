@@ -49,6 +49,8 @@ MEMORY
   RAM_D2 (xrw)   : ORIGIN = 0x30000000, LENGTH = 288K
   RAM_D3 (xrw)   : ORIGIN = 0x38000000, LENGTH = 64K
   ITCMRAM (xrw)  : ORIGIN = 0x00000000, LENGTH = 64K
+    SDRAM (xrw)     : ORIGIN = 0xc0000000, LENGTH = 32M
+
 }
 
 /* Define output sections */
@@ -177,6 +179,11 @@ SECTIONS
     . = ABSOLUTE(0x30040200);
     *(.Rx_PoolSection)
   } >RAM_D2
+      .sdram (NOLOAD) :
+      {
+          . = ABSOLUTE(0xc0000000);
+          *(.packet_buffer)
+  } > SDRAM
   /* Remove information from the standard libraries */
   /DISCARD/ :
   {
