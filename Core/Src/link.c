@@ -7,6 +7,8 @@
 #include "cJSON.h"
 #include "crc.h"
 #include "ds3231.h"
+#include "iwdg.h"
+#include "lwip.h"
 
 
 /* TCP PCB 句柄 */
@@ -122,42 +124,53 @@ err_t tcp_client_connected(void *arg, struct tcp_pcb *tpcb, err_t err) {
 }
 
 
-void send(uint8_t *buf, uint32_t body_len, enum MessageType cmd) {
+void send(uint8_t *buf, const uint32_t body_len, const enum MessageType cmd) {
     struct nshead_t head = NSHEAD_DEFAULT;
-    uint32_t uid[3];
-    uid[0] = HAL_GetUIDw0();
-    uid[1] = HAL_GetUIDw1();
-    uid[2] = HAL_GetUIDw2();
-    uint8_t sn[16];
-    sn[0] = (uid[0] >> 24) & 0xFF;
-    sn[1] = (uid[0] >> 16) & 0xFF;
-    sn[2] = (uid[0] >> 8) & 0xFF;
-    sn[3] = uid[0] & 0xFF;
-    sn[4] = (uid[1] >> 24) & 0xFF;
-    sn[5] = (uid[1] >> 16) & 0xFF;
-    sn[6] = (uid[1] >> 8) & 0xFF;
-    sn[7] = uid[1] & 0xFF;
-    sn[8] = (uid[2] >> 24) & 0xFF;
-    sn[9] = (uid[2] >> 16) & 0xFF;
-    sn[10] = (uid[2] >> 8) & 0xFF;
-    sn[11] = uid[2] & 0xFF;
-    // 将剩余的字节填充为零
-    memset(&sn[12], 0, 4);
+    const uint32_t uid[3] = {HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2()};
+    const uint8_t sn[16] = {
+        uid[0] >> 24 & 0xFF,
+        uid[0] >> 16 & 0xFF,
+        uid[0] >> 8 & 0xFF,
+        uid[0] & 0xFF,
+        uid[1] >> 24 & 0xFF,
+        uid[1] >> 16 & 0xFF,
+        uid[1] >> 8 & 0xFF,
+        uid[1] & 0xFF,
+        uid[2] >> 24 & 0xFF,
+        uid[2] >> 16 & 0xFF,
+        uid[2] >> 8 & 0xFF,
+        uid[2] & 0xFF, 0x00, 0x00, 0x00
+    };
     memcpy(head.sn, sn, sizeof(head.sn));
-    if (body_len > 0) {
-        head.checksum = HAL_CRC_Calculate(&hcrc, (uint32_t *) buf, body_len);
-    } else {
-        head.checksum = 0x0000;
-    }
+    head.checksum = body_len > 0 ? HAL_CRC_Calculate(&hcrc, (uint32_t *) buf, body_len) : 0;
     head.body_len = body_len;
     head.cmd = cmd;
     head.timestamp = DS3231_GetTimestamp();
     Fill_MessageID_With_HWRNG(head.message_id);
     const uint8_t *head_buffer = head_to_bytes(&head);
     tcp_write(tcp_client_pcb, head_buffer, sizeof(struct nshead_t), TCP_WRITE_FLAG_COPY);
-    if (body_len > 0) {
-        tcp_write(tcp_client_pcb, buf, body_len, TCP_WRITE_FLAG_COPY);
+    // 若有消息体，分片发送
+    uint32_t sent = 0;
+    while (sent < body_len) {
+        const uint32_t CHUNK = 1472;
+        const uint32_t remaining = body_len - sent;
+        const uint32_t len = remaining > CHUNK ? CHUNK : remaining;
+        // 等待发送缓冲区可用
+        while (tcp_sndbuf(tcp_client_pcb) < len) {
+            tcp_output(tcp_client_pcb);
+            MX_LWIP_Process();
+        }
+        // 对中间分片添加 TCP_WRITE_FLAG_MORE，最后一片不加
+        const uint8_t flags = TCP_WRITE_FLAG_COPY |
+                              (sent + len < body_len ? TCP_WRITE_FLAG_MORE : 0);
+        uint8_t data[len];
+        for (int i = 0; i < len; ++i) {
+            data[i] = buf[sent + i];
+        }
+        tcp_write(tcp_client_pcb, data, len, flags);
+        sent += len;
     }
+    // 最后一次 flush
     tcp_output(tcp_client_pcb);
 }
 

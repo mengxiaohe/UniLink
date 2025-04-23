@@ -8,11 +8,12 @@
 #include "memory_sections.h"
 
 
-extern char sn[16];
 extern uint32_t Pressure;
 uint32_t lanRxIndex;
 
 extern CRC_HandleTypeDef hcrc;
+
+extern uint8_t device_sn[16];
 
 
 /* 接收到服务器数据后的回调 */
@@ -48,14 +49,14 @@ void heartbeat_handler() {
 }
 
 void upload_big_data_handler() {
-    uint8_t body[2048];
-    send(body, 2048, UPLOAD_BIG_DATA);
+    const uint32_t body_len = 1024 * 1024 * 2;
+    send(packet_tx_buffer, body_len, UPLOAD_BIG_DATA);
 }
 
 
 uint8_t ping_flag = 0;
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+void HAL_TIM_PeriodElapsedCallback(const TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM2) {
         ping_flag = 1;
     }

@@ -94,10 +94,8 @@ uint32_t Pressure;
 uint8_t uartRxIndex = 0;
 char uartRxBuffer[UART_RX_BUFFER_SIZE];
 uint8_t uartReceiveByte;
-char sn[16];
 
-
-
+uint8_t device_sn[16];
 
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
@@ -175,15 +173,13 @@ int main(void) {
     MX_USART1_UART_Init();
     MX_I2C1_Init();
     MX_LWIP_Init();
-     MX_IWDG1_Init();
+    MX_IWDG1_Init();
     MX_CRC_Init();
     MX_I2C3_Init();
     MX_RNG_Init();
     MX_TIM2_Init();
     MX_FMC_Init();
     /* USER CODE BEGIN 2 */
-    snprintf(sn, 16, "%08X%08X%08X",
-             HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2());
     HAL_UART_Receive_IT(&huart1, &uartReceiveByte, 1);
     if (HAL_OK != EEPROM_Init(&hi2c1)) {
         printf("初始化eeprom失败\n");

@@ -13,7 +13,10 @@
 #include "shtc.h"
 #include "at24c32.h"
 #include "crc16_modbus.h"
+
 void heartbeat_handler();
+
+
 
 void process_data();
 #endif //TCP_CLIENT_SERVICES_H
