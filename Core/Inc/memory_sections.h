@@ -15,4 +15,8 @@ uint8_t packet_tx_buffer[LAN_PACKET_TX_BUFFER_SIZE] __attribute__((section(".pac
 
 uint8_t packet_buffer[PACKET_BUFFER_SIZE] __attribute__((section(".packet_buffer"))) = {0};
 
+uint8_t unallocated_memory[1024 * 1024 * 32 - LAN_PACKET_RX_BUFFER_SIZE - LAN_PACKET_TX_BUFFER_SIZE -
+                           PACKET_BUFFER_SIZE] __attribute__((
+    section(".unallocated_memory"))) = {0};
+
 #endif //MEMORY_SECTIONS_H

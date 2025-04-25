@@ -49,16 +49,24 @@ void heartbeat_handler() {
 }
 
 void upload_big_data_handler() {
-    const uint32_t body_len = 1024 * 1024 * 2;
-    send(packet_tx_buffer, body_len, UPLOAD_BIG_DATA);
+    const uint32_t body_len = 1024 * 1024 * 5;
+    send(unallocated_memory, body_len, UPLOAD_BIG_DATA);
 }
 
 
-uint8_t ping_flag = 0;
+uint64_t uw_tick = 0;
+uint8_t heartbeat_flag = 0;
+uint8_t upload_big_data_flag = 0;
 
-void HAL_TIM_PeriodElapsedCallback(const TIM_HandleTypeDef *htim) {
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM2) {
-        ping_flag = 1;
+        uw_tick += 1;
+        if (uwTick % 100 == 0) {
+            heartbeat_flag = 1;
+        }
+        if (uwTick % 5000 == 0) {
+            upload_big_data_flag = 1;
+        }
     }
 }
 
@@ -71,9 +79,12 @@ void print_message_id(uint8_t message_id[16]) {
 
 void process_data() {
     HAL_IWDG_Refresh(&hiwdg1);
-    if (tcp_connected_flag && ping_flag) {
-        ping_flag = 0;
+    if (tcp_connected_flag && heartbeat_flag) {
+        heartbeat_flag = 0;
         heartbeat_handler();
+    }
+    if (tcp_connected_flag && upload_big_data_flag) {
+        upload_big_data_flag = 0;
         upload_big_data_handler();
     }
     if (lanRxIndex >= sizeof(struct nshead_t)) {
