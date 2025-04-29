@@ -74,7 +74,7 @@ time_t DS3231_GetTimestamp(void) {
     tinfo.tm_mon = rtcTime.month - 1;
     tinfo.tm_year = rtcTime.year - 1900;
     tinfo.tm_isdst = -1; // 由库自动判断夏令时
-    return mktime(&tinfo);
+    return mktime(&tinfo) - 8 * 3600;
 }
 
 HAL_StatusTypeDef DS3231_ReadSQWConfig(void) {

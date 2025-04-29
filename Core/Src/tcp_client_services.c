@@ -14,7 +14,8 @@ extern CRC_HandleTypeDef hcrc;
 
 extern uint8_t device_sn[16];
 
-
+uint8_t ack_flag;
+uint8_t ack_message_id[16];
 /* 接收到服务器数据后的回调 */
 err_t tcp_client_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     if (err != ERR_OK || p == NULL) {
@@ -68,7 +69,10 @@ err_t tcp_client_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
         }
         if (nshead.cmd == PONG) {
         } else if (nshead.cmd == DOWNLOAD_BIG_DATA) {
-            // send(nshead.message_id, 16, TERMINAL_UNIVERSAL_ACK);
+            for (int i = 0; i < 16; ++i) {
+                ack_message_id[i] = nshead.message_id[i];
+            }
+            ack_flag = 1;
         }
         memmove(&packet_buffer[0], &packet_buffer[msg_len], lanRxIndex * sizeof(packet_buffer[0]));
         memset(&packet_buffer[lanRxIndex], 0, (LAN_PACKET_RX_BUFFER_SIZE - lanRxIndex) * sizeof(packet_buffer[0]));
@@ -83,7 +87,7 @@ void heartbeat_handler() {
 }
 
 void upload_big_data_handler() {
-    const uint32_t body_len = 1024 * 1024 * 5;
+    const uint32_t body_len = 1024 * 1024 * 2;
     send(unallocated_memory, body_len, UPLOAD_BIG_DATA);
 }
 #pragma pack(push, 1)
@@ -119,13 +123,13 @@ uint8_t upload_status_flag = 0;
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM2) {
         uw_tick += 1;
-        if (uw_tick % 50 == 0) {
+        if (uw_tick % 1000 == 0) {
             heartbeat_flag = 1;
         }
-        if (uw_tick % 2000 == 0) {
+        if (uw_tick % 6000 == 0) {
             upload_big_data_flag = 1;
         }
-        if (uw_tick % 500 == 0) {
+        if (uw_tick % 100 == 0) {
             upload_status_flag = 1;
         }
     }
@@ -151,5 +155,9 @@ void process_data() {
     if (tcp_connected_flag && upload_status_flag) {
         upload_status_flag = 0;
         upload_status_handler();
+    }
+    if (tcp_connected_flag && ack_flag) {
+        ack_flag = 0;
+        send(ack_message_id, 16, TERMINAL_UNIVERSAL_ACK);
     }
 }
