@@ -123,37 +123,57 @@ err_t tcp_client_connected(void *arg, struct tcp_pcb *tpcb, err_t err) {
     return ERR_OK;
 }
 
+uint16_t Modbus_CRC16(const uint8_t *buf, size_t len) {
+    uint16_t crc = 0xFFFF; // 初始值
+    while (len--) {
+        crc ^= *buf++; // 与下一个字节异或
+        for (int i = 0; i < 8; i++) {
+            // 对每一位进行处理
+            if (crc & 0x0001) {
+                crc = (crc >> 1) ^ 0xA001; // LSB 为 1 时右移并与多项式异或
+            } else {
+                crc >>= 1; // 否则仅右移
+            }
+        }
+    }
+    return crc;
+}
 
-void send(uint8_t *buf, const uint32_t body_len, const enum MessageType cmd) {
-    struct nshead_t head = NSHEAD_DEFAULT;
-    const uint32_t uid[3] = {HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2()};
-    const uint8_t sn[16] = {
-        uid[0] >> 24 & 0xFF,
-        uid[0] >> 16 & 0xFF,
-        uid[0] >> 8 & 0xFF,
-        uid[0] & 0xFF,
-        uid[1] >> 24 & 0xFF,
-        uid[1] >> 16 & 0xFF,
-        uid[1] >> 8 & 0xFF,
-        uid[1] & 0xFF,
-        uid[2] >> 24 & 0xFF,
-        uid[2] >> 16 & 0xFF,
-        uid[2] >> 8 & 0xFF,
-        uid[2] & 0xFF, 0x00, 0x00, 0x00
+static struct nshead_t make_nshead(uint8_t *buf, uint32_t body_len, enum MessageType cmd) {
+    struct nshead_t h = {
+        .magic_num = NSHEAD_MAGICNUM,
+        .version = NSHEAD_VERSION,
+        .reserved = 0,
+        .body_len = body_len,
+        .checksum = body_len > 0 ? HAL_CRC_Calculate(&hcrc, (uint32_t *) buf, body_len) : 0,
+        .cmd = cmd,
+        .timestamp = DS3231_GetTimestamp(),
     };
-    memcpy(head.sn, sn, sizeof(head.sn));
-    head.checksum = body_len > 0 ? HAL_CRC_Calculate(&hcrc, (uint32_t *) buf, body_len) : 0;
-    head.body_len = body_len;
-    head.cmd = cmd;
-    head.timestamp = DS3231_GetTimestamp();
-    Fill_MessageID_With_HWRNG(head.message_id);
-    const uint8_t *head_buffer = head_to_bytes(&head);
-    tcp_write(tcp_client_pcb, head_buffer, sizeof(struct nshead_t), TCP_WRITE_FLAG_COPY);
+    const uint8_t sn[16] = {
+        HAL_GetUIDw0() >> 24 & 0xFF,
+        HAL_GetUIDw0() >> 16 & 0xFF,
+        HAL_GetUIDw0() >> 8 & 0xFF,
+        HAL_GetUIDw0() & 0xFF,
+        HAL_GetUIDw1() >> 24 & 0xFF,
+        HAL_GetUIDw1() >> 16 & 0xFF,
+        HAL_GetUIDw1() >> 8 & 0xFF,
+        HAL_GetUIDw1() & 0xFF,
+        HAL_GetUIDw2() >> 24 & 0xFF,
+        HAL_GetUIDw2() >> 16 & 0xFF,
+        HAL_GetUIDw2() >> 8 & 0xFF,
+        HAL_GetUIDw2() & 0xFF, 0x00, 0x00, 0x00
+    };
+    memcpy(h.sn, sn, sizeof(h.sn));
+    Fill_MessageID_With_HWRNG(h.message_id);
+    return h;
+}
+
+void send_x(uint8_t *buf, const uint32_t msg_len) {
     // 若有消息体，分片发送
     uint32_t sent = 0;
-    while (sent < body_len) {
+    while (sent < msg_len) {
         const uint32_t CHUNK = 1472;
-        const uint32_t remaining = body_len - sent;
+        const uint32_t remaining = msg_len - sent;
         const uint32_t len = remaining > CHUNK ? CHUNK : remaining;
         // 等待发送缓冲区可用
         while (tcp_sndbuf(tcp_client_pcb) < len) {
@@ -162,7 +182,7 @@ void send(uint8_t *buf, const uint32_t body_len, const enum MessageType cmd) {
         }
         // 对中间分片添加 TCP_WRITE_FLAG_MORE，最后一片不加
         const uint8_t flags = TCP_WRITE_FLAG_COPY |
-                              (sent + len < body_len ? TCP_WRITE_FLAG_MORE : 0);
+                              (sent + len < msg_len ? TCP_WRITE_FLAG_MORE : 0);
         uint8_t data[len];
         for (int i = 0; i < len; ++i) {
             data[i] = buf[sent + i];
@@ -172,6 +192,59 @@ void send(uint8_t *buf, const uint32_t body_len, const enum MessageType cmd) {
     }
     // 最后一次 flush
     tcp_output(tcp_client_pcb);
+}
+
+void send(uint8_t *buf, const uint32_t body_len, const enum MessageType cmd) {
+    const struct nshead_t head = make_nshead(buf, body_len, cmd);
+    err_t e;
+    while (tcp_sndbuf(tcp_client_pcb) < sizeof(struct nshead_t)) {
+        e = tcp_output(tcp_client_pcb);
+        if (e != ERR_OK) {
+            printf("send:1 tcp_output发生错误 err code:%d\n", e);
+            NVIC_SystemReset();
+        }
+        MX_LWIP_Process();
+    }
+    e = tcp_write(tcp_client_pcb, head_to_bytes(&head), sizeof(struct nshead_t), TCP_WRITE_FLAG_COPY);
+    if (e != ERR_OK) {
+        printf("send:2 tcp_write err code:%d\n", e);
+        NVIC_SystemReset();
+    }
+    // 若有消息体，分片发送
+    uint32_t sent = 0;
+    while (sent < body_len) {
+        const uint32_t CHUNK = 1472;
+        const uint32_t remaining = body_len - sent;
+        const uint32_t len = remaining > CHUNK ? CHUNK : remaining;
+        // 等待发送缓冲区可用
+        while (tcp_sndbuf(tcp_client_pcb) < len) {
+            e = tcp_output(tcp_client_pcb);
+            if (e != ERR_OK) {
+                printf("send:3 tcp_output发生错误 err code:%d\n", e);
+                NVIC_SystemReset();
+            }
+            MX_LWIP_Process();
+        }
+        // 对中间分片添加 TCP_WRITE_FLAG_MORE，最后一片不加
+        const uint8_t flags = TCP_WRITE_FLAG_COPY |
+                              (sent + len < body_len ? TCP_WRITE_FLAG_MORE : 0);
+        uint8_t data[len];
+        for (int i = 0; i < len; ++i) {
+            data[i] = buf[sent + i];
+        }
+        e = tcp_write(tcp_client_pcb, data, len, flags);
+        if (e != ERR_OK) {
+            printf("send:3 tcp_write err code:%d\n", e);
+            NVIC_SystemReset();
+        }
+        sent += len;
+    }
+    // 最后一次 flush
+    e = tcp_output(tcp_client_pcb);
+    if (e != ERR_OK) {
+        printf("send:4 tcp_output发生错误 err code:%d\n", e);
+        NVIC_SystemReset();
+    }
 }
 
 /* 发生错误时的回调 */

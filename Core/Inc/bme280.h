@@ -39,7 +39,7 @@
  * @param filter IIR滤波系数设置
  * @return 配置成功返回0，失败返回-1
  */
-int BME280_Config (uint8_t osrs_t, uint8_t osrs_p, uint8_t osrs_h, uint8_t mode, uint8_t t_sb, uint8_t filter);
+int BME280_Config(uint8_t osrs_t, uint8_t osrs_p, uint8_t osrs_h, uint8_t mode, uint8_t t_sb, uint8_t filter);
 
 /**
  * @brief 读取传感器内部存储的校准参数
@@ -53,9 +53,9 @@ void TrimRead(void);
 void BME280_WakeUP(void);
 
 /**
- * @brief 执行温度、压力和湿度测量，并将测量结果保存到全局变量中
+ * @brief 执行温度、压力和湿度测量
  */
-void BME280_Measure (void);
+void BME280_Measure(float *Temperature, float *Humidity, float *Pressure) ;
 
 /* 以下为BME280使用的宏定义 */
 

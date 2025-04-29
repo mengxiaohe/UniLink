@@ -8,7 +8,6 @@
 #include "memory_sections.h"
 
 
-extern uint32_t Pressure;
 uint32_t lanRxIndex;
 
 extern CRC_HandleTypeDef hcrc;
@@ -39,6 +38,41 @@ err_t tcp_client_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
     }
     tcp_recved(tpcb, p->tot_len);
     pbuf_free(p);
+    if (lanRxIndex >= sizeof(struct nshead_t)) {
+        struct nshead_t nshead = bytes_to_head(packet_buffer);
+        if (NSHEAD_MAGICNUM != nshead.magic_num) {
+            printf("magic错误\n");
+            NVIC_SystemReset();
+        }
+        const uint32_t body_len = nshead.body_len;
+        const uint32_t msg_len = sizeof(struct nshead_t) + body_len;
+        if (msg_len > lanRxIndex) {
+            return ERR_OK;
+        }
+        lanRxIndex -= msg_len;
+        if (body_len > 0) {
+            uint8_t *src = packet_buffer + sizeof(struct nshead_t);
+            const uint32_t actual_crc = HAL_CRC_Calculate(&hcrc, (uint32_t *) src, body_len);
+            if (actual_crc != nshead.checksum) {
+                printf("crc error  actual_crc:%x checksum:%x body_len:%d\n", actual_crc, nshead.checksum, body_len);
+                NVIC_SystemReset();
+            }
+            if (body_len > 1024) {
+                printf("消息解析结束 len:%d timestamp:%d cmd:%04X checksum:%04X  \n", msg_len, nshead.timestamp, nshead.cmd,
+                       nshead.checksum);
+            } else {
+                printf("消息解析结束 len:%d timestamp:%d cmd:%04X checksum:%04X body:%.*s\n", msg_len, nshead.timestamp,
+                       nshead.cmd,
+                       nshead.checksum, body_len, (char *) src);
+            }
+        }
+        if (nshead.cmd == PONG) {
+        } else if (nshead.cmd == DOWNLOAD_BIG_DATA) {
+            // send(nshead.message_id, 16, TERMINAL_UNIVERSAL_ACK);
+        }
+        memmove(&packet_buffer[0], &packet_buffer[msg_len], lanRxIndex * sizeof(packet_buffer[0]));
+        memset(&packet_buffer[lanRxIndex], 0, (LAN_PACKET_RX_BUFFER_SIZE - lanRxIndex) * sizeof(packet_buffer[0]));
+    }
     return ERR_OK;
 }
 
@@ -52,20 +86,47 @@ void upload_big_data_handler() {
     const uint32_t body_len = 1024 * 1024 * 5;
     send(unallocated_memory, body_len, UPLOAD_BIG_DATA);
 }
+#pragma pack(push, 1)
 
+typedef struct {
+    uint16_t temperature; /* 温度 */
+    uint16_t humidity; /* 湿度 */
+    uint32_t pressure; /* 气压 */
+} sensor_data_t;
+#pragma pack(pop)
+
+void upload_status_handler() {
+    uint16_t temperature;
+    uint16_t humidity;
+    float pressure;
+    SHTC3_GetTempAndHumi(&temperature, &humidity);
+    BME280_Measure(NULL,NULL, &pressure);
+    const sensor_data_t data = {
+        .temperature = htons(temperature), /* 比如表示 25.0°C */
+        .humidity = htons(humidity), /* 比如表示 60.0% */
+        .pressure = htonl((uint32_t)pressure) /* 单位 Pa */
+    };
+    uint8_t buf[sizeof(sensor_data_t)];
+    memcpy(buf, &data, sizeof(buf));
+    send(buf, sizeof(sensor_data_t), UPLOAD_STATUS);
+}
 
 uint64_t uw_tick = 0;
 uint8_t heartbeat_flag = 0;
 uint8_t upload_big_data_flag = 0;
+uint8_t upload_status_flag = 0;
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM2) {
         uw_tick += 1;
-        if (uwTick % 100 == 0) {
+        if (uw_tick % 50 == 0) {
             heartbeat_flag = 1;
         }
-        if (uwTick % 5000 == 0) {
+        if (uw_tick % 2000 == 0) {
             upload_big_data_flag = 1;
+        }
+        if (uw_tick % 500 == 0) {
+            upload_status_flag = 1;
         }
     }
 }
@@ -87,39 +148,8 @@ void process_data() {
         upload_big_data_flag = 0;
         upload_big_data_handler();
     }
-    if (lanRxIndex >= sizeof(struct nshead_t)) {
-        struct nshead_t nshead = bytes_to_head(packet_buffer);
-        if (NSHEAD_MAGICNUM != nshead.magic_num) {
-            printf("magic错误\n");
-            NVIC_SystemReset();
-        }
-        const uint32_t body_len = nshead.body_len;
-        const uint32_t msg_len = sizeof(struct nshead_t) + body_len;
-        if (msg_len > lanRxIndex) {
-            return;
-        }
-        lanRxIndex -= msg_len;
-        if (body_len > 0) {
-            uint8_t *src = packet_buffer + sizeof(struct nshead_t);
-            const uint32_t actual_crc = HAL_CRC_Calculate(&hcrc, (uint32_t *) src, body_len);
-            if (actual_crc != nshead.checksum) {
-                printf("crc error  actual_crc:%x checksum:%x body_len:%d\n", actual_crc, nshead.checksum, body_len);
-                NVIC_SystemReset();
-            }
-            if (body_len > 1024) {
-                printf("消息解析结束 len:%d timestamp:%d cmd:%04X checksum:%04X  \n", msg_len, nshead.timestamp, nshead.cmd,
-                       nshead.checksum);
-            } else {
-                printf("消息解析结束 len:%d timestamp:%d cmd:%04X checksum:%04X body:%.*s\n", msg_len, nshead.timestamp,
-                       nshead.cmd,
-                       nshead.checksum, body_len, (char *) src);
-            }
-        }
-        if (nshead.cmd == PONG) {
-        } else if (nshead.cmd == DOWNLOAD_BIG_DATA) {
-            send(nshead.message_id, 16, TERMINAL_UNIVERSAL_ACK);
-        }
-        memmove(&packet_buffer[0], &packet_buffer[msg_len], lanRxIndex * sizeof(packet_buffer[0]));
-        memset(&packet_buffer[lanRxIndex], 0, (LAN_PACKET_RX_BUFFER_SIZE - lanRxIndex) * sizeof(packet_buffer[0]));
+    if (tcp_connected_flag && upload_status_flag) {
+        upload_status_flag = 0;
+        upload_status_handler();
     }
 }

@@ -14,7 +14,6 @@
 #include "at24c32.h"
 #include "crc16_modbus.h"
 
-void heartbeat_handler();
 
 
 

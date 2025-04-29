@@ -24,10 +24,6 @@ extern I2C_HandleTypeDef hi2c1;
 // BME280的I2C地址：当SDO接地时，7位地址为0x76，8位地址为(0x76<<1)=0xEC，此处使用8位地址表示
 #define BME280_ADDRESS 0xEE
 
-// 全局变量：存储温度（单位：℃）、压力（单位：Pa）和湿度（单位：%RH）的测量结果
-extern float Temperature;
-extern float Humidity;
-extern uint32_t Pressure;
 
 uint8_t chipID;
 uint8_t TrimParam[36]; // 用于存放校准数据（本例中直接读取到临时数组中）
@@ -156,7 +152,7 @@ int BME280_Config(const uint8_t osrs_t, const uint8_t osrs_p, const uint8_t osrs
 int BMEReadRaw(void) {
     // 读取芯片ID
     if (HAL_I2C_Mem_Read(BME280_I2C, BME280_ADDRESS, ID_REG, I2C_MEMADD_SIZE_8BIT,
-                         &chipID, 1, 1000) != HAL_OK) {
+                         &chipID, 1, 10) != HAL_OK) {
         return -1;
     }
 
@@ -165,7 +161,7 @@ int BMEReadRaw(void) {
         uint8_t RawData[8];
         // 从寄存器0xF7开始连续读取8字节数据：3字节压力，3字节温度，2字节湿度
         if (HAL_I2C_Mem_Read(BME280_I2C, BME280_ADDRESS, PRESS_MSB_REG, I2C_MEMADD_SIZE_8BIT,
-                             RawData, 8, HAL_MAX_DELAY) != HAL_OK) {
+                             RawData, 8, 80) != HAL_OK) {
             return -1;
         }
 
@@ -291,34 +287,21 @@ uint32_t bme280_compensate_H_int32(const int32_t adc_H) {
 /**
  * @brief 执行温度、压力和湿度的测量，并更新全局变量
  */
-void BME280_Measure(void) {
+void BME280_Measure(float *Temperature, float *Humidity, float *Pressure) {
     if (BMEReadRaw() == 0) {
         // 温度测量：若返回无效数据（0x800000），则置0
-        if (tRaw == 0x800000) {
-            Temperature = 0;
-        } else {
-            Temperature = (float) BME280_compensate_T_int32(tRaw) / 100.0f;
-        }
+        *Temperature = tRaw == 0x800000 ? 0 : (float) BME280_compensate_T_int32(tRaw) / 100.0f;
         // 压力测量
-        if (pRaw == 0x800000)
-            Pressure = 0;
-        else {
 #if SUPPORT_64BIT
-            Pressure = (float) BME280_compensate_P_int64(pRaw) / 256.0f;
+        *Pressure = pRaw == 0x800000 ? 0 : (float) BME280_compensate_P_int64(pRaw) / 256.0f;
 #elif defined(SUPPORT_32BIT)
-            Pressure = BME280_compensate_P_int32(pRaw);
+        *Pressure = pRaw == 0x800000 ? 0 : (float) BME280_compensate_P_int32(hRaw) / 256.0f;
 #endif
-        }
-
         // 湿度测量：若返回无效数据（0x8000），则置0
-        if (hRaw == 0x8000) {
-            Humidity = 0;
-        } else {
-            Humidity = (float) bme280_compensate_H_int32(hRaw) / 1024.0f;
-        }
+        *Humidity = hRaw == 0x800000 ? 0 : (float) bme280_compensate_H_int32(hRaw) / 1024.0f;
     } else {
         // 读取失败时，所有测量值均置为0
-        Temperature = Pressure = Humidity = 0;
+        *Temperature = *Pressure = *Humidity = 0;
     }
 }
 
@@ -326,8 +309,7 @@ void BME280_Measure(void) {
 #ifndef NO_EXAMPLES
 void bm3280_example() {
     BME280_Config(OSRS_2, OSRS_16, OSRS_1, MODE_NORMAL, T_SB_0p5, IIR_16);
-    BME280_Measure();
-    printf("Temperature:%f Pressure:%f Humidity:%f\r\n",
-           Temperature, Pressure, Humidity);
+    float Temperature, Humidity, Pressure;
+    BME280_Measure(&Temperature, &Humidity, &Pressure);
 }
 #endif

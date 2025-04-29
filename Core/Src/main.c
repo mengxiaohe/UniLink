@@ -85,9 +85,7 @@ PUTCHAR_PROTOTYPE {
     return ch;
 }
 
-float Temperature;
-float Humidity;
-uint32_t Pressure;
+
 
 
 uint8_t uartRxIndex = 0;

@@ -69,7 +69,7 @@ time_t DS3231_GetTimestamp(void) {
     struct tm tinfo = {0};
     tinfo.tm_sec = rtcTime.sec;
     tinfo.tm_min = rtcTime.min;
-    tinfo.tm_hour = rtcTime.hour - 8;
+    tinfo.tm_hour = rtcTime.hour;
     tinfo.tm_mday = rtcTime.day;
     tinfo.tm_mon = rtcTime.month - 1;
     tinfo.tm_year = rtcTime.year - 1900;

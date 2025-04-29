@@ -8,7 +8,8 @@
 
 const uint32_t DEVICECONFIG_MAGICNUM = 0xfb7affaa;
 
-#pragma pack(1)
+#pragma pack(push, 1)
+
 typedef struct {
     /**
       * 魔数
@@ -31,6 +32,7 @@ typedef struct {
      */
     uint16_t checksum;
 } DeviceConfig_t;
+#pragma pack(pop)
 
 
 
