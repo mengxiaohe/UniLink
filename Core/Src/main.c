@@ -58,6 +58,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -71,6 +72,7 @@ uint8_t tcp_connected_flag = 0;
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+
 
 /* USER CODE END PV */
 
@@ -184,6 +186,7 @@ int main(void) {
     printf("启动时间:%04d-%02d-%02d %02d:%02d:%02d\r\n",
            rtcTime.year, rtcTime.month, rtcTime.day,
            rtcTime.hour, rtcTime.min, rtcTime.sec);
+
     struct dhcp *dhcp;
     do {
         MX_LWIP_Process();

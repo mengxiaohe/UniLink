@@ -15,12 +15,15 @@ extern CRC_HandleTypeDef hcrc;
 extern uint8_t device_sn[16];
 
 uint8_t ack_flag;
+uint8_t ota_flag;
+
 uint8_t ack_message_id[16];
 /* 接收到服务器数据后的回调 */
 err_t tcp_client_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     if (err != ERR_OK || p == NULL) {
         tcp_connected_flag = 0;
         tcp_close(tpcb);
+        printf("收到关闭请求\n");
         NVIC_SystemReset();
     }
     const struct pbuf *q = p;
@@ -104,6 +107,20 @@ void print_message_id(uint8_t message_id[16]) {
     printf("\r\n");
 }
 
+typedef void (*pFunction)(void);
+
+// 跳转方法一定要放到main中
+void Jump_To_App(uint32_t addr) {
+    printf("bootloader to app\r\n");
+    __disable_irq();
+    uint32_t JumpAddress;
+    JumpAddress = *(volatile uint32_t *) (addr + 4);
+    pFunction Jump_To_Application;
+    Jump_To_Application = (pFunction) JumpAddress;
+    __set_MSP(*(volatile uint32_t *) addr);
+    Jump_To_Application();
+}
+
 void process_data() {
     HAL_IWDG_Refresh(&hiwdg1);
     if (lanRxIndex >= sizeof(struct nshead_t)) {
@@ -115,6 +132,18 @@ void process_data() {
         const uint32_t body_len = nshead.body_len;
         const uint32_t msg_len = sizeof(struct nshead_t) + body_len;
         if (msg_len <= lanRxIndex) {
+            if (nshead.cmd == PONG) {
+            } else if (nshead.cmd == DOWNLOAD_BIG_DATA) {
+                for (int i = 0; i < 16; ++i) {
+                    ack_message_id[i] = nshead.message_id[i];
+                }
+                ack_flag = 1;
+            } else if (nshead.cmd == OTA) {
+                for (int i = 0; i < 16; ++i) {
+                    ack_message_id[i] = nshead.message_id[i];
+                }
+                ota_flag = 1;
+            }
             if (body_len > 0) {
                 uint8_t *src = packet_buffer + sizeof(struct nshead_t);
                 const uint32_t actual_crc = HAL_CRC_Calculate(&hcrc, (uint32_t *) src, body_len);
@@ -131,13 +160,13 @@ void process_data() {
                            nshead.cmd,
                            nshead.checksum, body_len, (char *) src);
                 }
-            }
-            if (nshead.cmd == PONG) {
-            } else if (nshead.cmd == DOWNLOAD_BIG_DATA) {
-                for (int i = 0; i < 16; ++i) {
-                    ack_message_id[i] = nshead.message_id[i];
+                if (nshead.cmd == OTA) {
+                    ota_flag = 1;
+                    for (int i = 0; i < body_len; ++i) {
+                        code_buffer[i] = src[i];
+                    }
+                    Jump_To_App(0x08100000);
                 }
-                ack_flag = 1;
             }
             lanRxIndex -= msg_len;
             memmove(&packet_buffer[0], &packet_buffer[msg_len], lanRxIndex * sizeof(packet_buffer[0]));
@@ -158,6 +187,10 @@ void process_data() {
     }
     if (tcp_connected_flag && ack_flag) {
         ack_flag = 0;
+        send(ack_message_id, 16, TERMINAL_UNIVERSAL_ACK);
+    }
+    if (tcp_connected_flag && ota_flag) {
+        ota_flag = 0;
         send(ack_message_id, 16, TERMINAL_UNIVERSAL_ACK);
     }
 }

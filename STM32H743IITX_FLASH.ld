@@ -188,7 +188,9 @@ SECTIONS
              . = ABSOLUTE(0xc0800000);
              *(.packet_rx_buffer)
              . = ABSOLUTE(0xc0C00000);
-             *(.unallocated_memory)
+             *(.code_buf)
+              . = ABSOLUTE(0xC1000000);
+              *(.unallocated_memory)
   } > SDRAM
   /* Remove information from the standard libraries */
   /DISCARD/ :

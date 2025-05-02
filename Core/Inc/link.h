@@ -21,6 +21,7 @@ enum MessageType : uint16_t {
     PONG = 0x7FFF,
     TERMINAL_UNIVERSAL_ACK = 0x7FFE,
     DOWNLOAD_BIG_DATA = 0x8000,
+    OTA = 0x8001,
 };
 
 static const uint32_t NSHEAD_MAGICNUM = 0xfb7a9394;
